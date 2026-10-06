@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────────────────────
+    // Admin Authorization Helper
+    // Checks that request is authenticated and user's email/UID is in the allowlist
+    // ─────────────────────────────────────────────
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.email in [
+          'unknown@prisonbreak.dev',
+          'unknown@prisonbreak.com',
+          'unknown@admin.com',
+          'warden@prisonbreak.dev',
+          'admin@prisonbreak.com'
+        ] ||
+        (request.auth.token.email != null && request.auth.token.email.matches('unknown@.*')) ||
+        request.auth.uid in ['warden-demo-01', 'warden-local-01']
+      );
+    }
+
+    // ─────────────────────────────────────────────
+    // Public Collections: Readable by anyone
+    // Writable ONLY by authenticated, authorized admins
+    // ─────────────────────────────────────────────
+
+    // Participants Collection
+    match /participants/{participantId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Cell Repositories Collection
+    match /repositories/{repositoryId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Pull Requests Collection
+    match /pullRequests/{prId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Manual & Automated Score Events Collection
+    match /scoreEvents/{eventId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Event Configuration (Event name, tagline, status)
+    match /eventConfig/{configId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Reviews Collection
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Admin Credentials
+    match /admin/credentials {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Default catch-all: Deny all unauthenticated or unauthorized access
+    match /{document=**} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
