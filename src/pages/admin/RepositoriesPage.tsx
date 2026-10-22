@@ -131,45 +131,45 @@ export default function RepositoriesPage() {
   const inactiveCount = repos.filter((r) => (r.active === false) || (r.status === 'inactive')).length;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-8">
       {/* Page Header */}
-      <div className="flex items-start justify-between flex-wrap gap-4">
+      <div className="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-white/[0.06]">
         <div>
-          <h1 className="font-display text-xl font-bold text-slate-100 tracking-wide mb-1">
+          <h1 className="text-2xl font-extrabold text-white tracking-tight mb-1">
             Repositories
           </h1>
-          <p className="font-mono text-xs text-slate-500">
+          <p className="text-sm text-slate-400">
             GitHub repositories registered for event challenge tracking
           </p>
         </div>
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={() => {
               setSyncRepoTarget(undefined);
               setIsSyncModalOpen(true);
             }}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-400 font-mono text-xs font-semibold transition-all shadow-md shadow-emerald-950/20"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-slate-200 text-xs font-semibold transition-all shadow-sm"
             title="Sync all pull requests from registered GitHub repositories"
           >
-            <RefreshCw size={14} />
+            <RefreshCw size={14} className="text-cyan-400" />
             <span>Sync PRs from GitHub</span>
           </button>
           <button
             onClick={() => setShowAddModal(true)}
-            className="btn btn-primary"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white text-xs font-bold transition-all shadow-lg shadow-rose-900/30"
           >
-            <Plus size={14} />
-            Add Repository
+            <Plus size={15} />
+            <span>Add Repository</span>
           </button>
         </div>
       </div>
 
       {/* Success Notification Banner */}
       {successMessage && (
-        <div className="p-3.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 flex items-center justify-between text-emerald-300 font-mono text-xs animate-in fade-in slide-in-from-top duration-200">
-          <div className="flex items-center gap-2">
+        <div className="p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 flex items-center justify-between text-emerald-300 text-xs animate-in fade-in slide-in-from-top duration-200">
+          <div className="flex items-center gap-2.5">
             <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
-            <span>{successMessage}</span>
+            <span className="font-medium">{successMessage}</span>
           </div>
           <button
             onClick={() => setSuccessMessage(null)}
@@ -182,10 +182,10 @@ export default function RepositoriesPage() {
 
       {/* Error Banner */}
       {error && (
-        <div className="p-3.5 rounded-lg border border-rose-500/30 bg-rose-500/10 flex items-center justify-between text-rose-300 font-mono text-xs">
-          <div className="flex items-center gap-2">
+        <div className="p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 flex items-center justify-between text-rose-300 text-xs">
+          <div className="flex items-center gap-2.5">
             <AlertCircle size={16} className="text-rose-400 shrink-0" />
-            <span>{error}</span>
+            <span className="font-medium">{error}</span>
           </div>
           <button
             onClick={() => setError(null)}
@@ -197,10 +197,10 @@ export default function RepositoriesPage() {
       )}
 
       {/* Organizer Context Banner */}
-      <div className="p-3 rounded-lg border border-slate-800 bg-slate-900/50 flex items-start gap-2.5 text-xs font-mono text-slate-400">
-        <Info size={15} className="text-blue-400 shrink-0 mt-0.5" />
-        <div>
-          <span className="text-slate-300 font-semibold">Organizers create GitHub repositories separately.</span> PRison Control does not create GitHub repositories. It only stores and manages repositories that organizers register. Inactive repositories remain saved in Firestore but are excluded from event automation.
+      <div className="p-4 rounded-xl border border-white/[0.06] bg-slate-900/40 flex items-start gap-3 text-xs text-slate-400">
+        <Info size={16} className="text-blue-400 shrink-0 mt-0.5" />
+        <div className="leading-relaxed">
+          <span className="text-slate-200 font-semibold">Organizers create GitHub repositories separately.</span> PRison Control does not create GitHub repositories. It stores and manages repositories that organizers register for competition squads. Inactive repositories remain saved in Firestore but are excluded from event automation.
         </div>
       </div>
 

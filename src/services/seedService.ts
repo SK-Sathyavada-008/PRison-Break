@@ -10,6 +10,9 @@ import { eventConfigService } from './eventConfigService';
 import { collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../config/firebase';
 
+import { teamService } from './teamService';
+import { issueService } from './issueService';
+
 export const seedService = {
   /**
    * Seeds all initial mock data into Firestore if Firebase is connected.
@@ -24,6 +27,8 @@ export const seedService = {
 
     try {
       await Promise.all([
+        teamService.seedInitialTeams(),
+        issueService.seedIssues(),
         participantService.seedInitialParticipants(),
         repositoryService.seedInitialRepositories(),
         pullRequestService.seedInitialPullRequests(),
@@ -60,7 +65,7 @@ export const seedService = {
     }
 
     try {
-      const collectionsToPurge = ['participants', 'repositories', 'pullRequests', 'scoreEvents'];
+      const collectionsToPurge = ['teams', 'issues', 'auditLogs', 'participants', 'repositories', 'pullRequests', 'scoreEvents'];
       for (const colName of collectionsToPurge) {
         const snap = await getDocs(collection(db, colName));
         const deletions = snap.docs.map((d) => deleteDoc(d.ref));

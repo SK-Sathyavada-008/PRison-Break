@@ -16,11 +16,13 @@ import {
   Maximize2,
   Minimize2,
 } from 'lucide-react';
-import type { Participant, FirestoreEventConfig } from '../types';
-import { participantService } from '../services/participantService';
+import type { Team, FirestoreEventConfig } from '../types';
+import { teamService } from '../services/teamService';
 import { eventConfigService } from '../services/eventConfigService';
 import { autoSyncService, type AutoSyncState } from '../services/autoSyncService';
 import Podium from '../components/leaderboard/Podium';
+import AwardsShowcase from '../components/leaderboard/AwardsShowcase';
+import TeamDetailModal from '../components/leaderboard/TeamDetailModal';
 import LeaderboardTable from '../components/leaderboard/LeaderboardTable';
 import LoadingState from '../components/ui/LoadingState';
 import EmptyState from '../components/ui/EmptyState';
@@ -32,11 +34,12 @@ export default function LeaderboardPage() {
   const [projectorMode, setProjectorMode] = useState(isDedicatedLeaderboardRoute);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [eventConfig, setEventConfig] = useState<FirestoreEventConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [syncState, setSyncState] = useState<AutoSyncState>(autoSyncService.getState());
 
   useEffect(() => {
@@ -48,17 +51,16 @@ export default function LeaderboardPage() {
   useEffect(() => {
     setLoading(true);
 
-    // 1. Subscribe in real time to Firestore participants
-    const unsubParticipants = participantService.subscribeToLeaderboard(
+    // 1. Subscribe in real time to Firestore teams (Squad rankings)
+    const unsubTeams = teamService.subscribeToTeamsLeaderboard(
       (data) => {
-        // Filter out deactivated participants from public leaderboard
-        const activeOnly = data.filter((p) => p.active !== false && p.status !== 'inactive');
-        setParticipants(activeOnly);
+        const activeOnly = data.filter((t) => t.active !== false);
+        setTeams(activeOnly);
         setLoading(false);
         setLastUpdated(new Date());
       },
       (err) => {
-        console.error('[LeaderboardPage] Firestore error:', err);
+        console.error('[LeaderboardPage] Teams Firestore error:', err);
         setLoading(false);
       }
     );
@@ -69,7 +71,7 @@ export default function LeaderboardPage() {
     });
 
     return () => {
-      unsubParticipants();
+      unsubTeams();
       unsubConfig();
     };
   }, []);
@@ -86,27 +88,36 @@ export default function LeaderboardPage() {
     }
   };
 
-  const filteredParticipants = useMemo(() => {
-    if (!searchQuery.trim()) return participants;
+  const filteredTeams = useMemo(() => {
+    if (!searchQuery.trim()) return teams;
     const q = searchQuery.toLowerCase().trim();
-    return participants.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.githubUsername.toLowerCase().includes(q)
+    return teams.filter(
+      (t) =>
+        t.name.toLowerCase().includes(q) ||
+        t.repositoryName.toLowerCase().includes(q) ||
+        t.members.some(
+          (m) =>
+            m.name.toLowerCase().includes(q) ||
+            m.githubUsername.toLowerCase().includes(q)
+        )
     );
-  }, [participants, searchQuery]);
+  }, [teams, searchQuery]);
 
-  const totalXP = useMemo(
-    () => participants.reduce((acc, p) => acc + (p.totalScore ?? p.xp ?? 0), 0),
-    [participants]
+  const totalTeamScore = useMemo(
+    () => teams.reduce((acc, t) => acc + (t.totalScore ?? 0), 0),
+    [teams]
   );
-  const totalMerges = useMemo(
-    () => participants.reduce((acc, p) => acc + (p.mergedPrCount ?? p.mergedPRs ?? 0), 0),
-    [participants]
+  const totalSolvedIssues = useMemo(
+    () => teams.reduce((acc, t) => acc + (t.validatedIssueCount ?? t.solvedIssues?.length ?? 0), 0),
+    [teams]
   );
-  const totalEscapes = useMemo(
-    () => participants.reduce((acc, p) => acc + (p.escapedCells ?? 0), 0),
-    [participants]
+  const totalPrsSubmitted = useMemo(
+    () => teams.reduce((acc, t) => acc + (t.prsSubmitted ?? 0), 0),
+    [teams]
+  );
+  const maxPossiblePRs = useMemo(
+    () => teams.reduce((acc, t) => acc + (t.members?.length || 4), 0),
+    [teams]
   );
 
   return (
@@ -143,12 +154,12 @@ export default function LeaderboardPage() {
         />
       </div>
 
-      {/* Main Content Container */}
+      {/* Main Content Container with Generous Border Margins on All Sides */}
       <main
         className={`relative z-10 w-full flex flex-col items-center transition-all duration-300 ${
           projectorMode
-            ? 'px-4 sm:px-8 lg:px-14 py-8 sm:py-12 max-w-[1920px]'
-            : 'px-6 sm:px-12 lg:px-20 xl:px-24 py-12 sm:py-16 max-w-[1680px]'
+            ? 'px-8 sm:px-12 lg:px-16 py-10 sm:py-14 pb-32 max-w-[1720px]'
+            : 'px-8 sm:px-14 md:px-20 lg:px-28 xl:px-36 py-12 sm:py-16 pb-36 max-w-[1520px]'
         }`}
       >
         {/* Top Header Bar — Public Only, NO Admin Controls */}
@@ -220,7 +231,7 @@ export default function LeaderboardPage() {
         {/* Hero Section */}
         <section className="w-full flex flex-col items-center text-center my-6 sm:my-10 space-y-4">
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900/90 border border-[#FF0A3B]/30 text-xs text-[#FF5470] font-mono tracking-widest uppercase shadow-[0_0_20px_rgba(255,10,59,0.15)]">
-            <span>// DETERMINISTIC EVENT RANKINGS</span>
+            <span>// TEAM-BASED OFFLINE HACKATHON RANKINGS</span>
           </div>
 
           <h1
@@ -235,7 +246,7 @@ export default function LeaderboardPage() {
               projectorMode ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
             }`}
           >
-            Real-time deterministic scoring: Total XP ↓, Merged PRs ↓, Earliest Merge ↑. Updates automatically in real time.
+            Deterministic team rankings: Total Score ↓, Validated Issues ↓, PRs Submitted ↓, Earliest Merge ↑. Sum of non-duplicated issue difficulty scores from 4 registered students.
           </p>
         </section>
 
@@ -244,56 +255,56 @@ export default function LeaderboardPage() {
           <div className="card p-6 sm:p-7 text-center flex flex-col items-center justify-center hover:border-[#FF0A3B]/40 transition-all">
             <div className="flex items-center justify-center gap-2 text-xs text-slate-400 font-mono uppercase tracking-widest mb-2">
               <Users size={16} className="text-[#FF5470]" />
-              <span>Participants</span>
+              <span>Squad Teams</span>
             </div>
             <div
               className={`font-black font-mono text-white tracking-tight ${
                 projectorMode ? 'text-4xl sm:text-6xl' : 'text-3xl sm:text-5xl'
               }`}
             >
-              {participants.length}
-            </div>
-          </div>
-
-          <div className="card p-6 sm:p-7 text-center flex flex-col items-center justify-center hover:border-purple-500/40 transition-all">
-            <div className="flex items-center justify-center gap-2 text-xs text-slate-400 font-mono uppercase tracking-widest mb-2">
-              <GitMerge size={16} className="text-purple-400" />
-              <span>Merged Escapes</span>
-            </div>
-            <div
-              className={`font-black font-mono text-white tracking-tight ${
-                projectorMode ? 'text-4xl sm:text-6xl' : 'text-3xl sm:text-5xl'
-              }`}
-            >
-              {totalMerges}
+              {teams.length}
             </div>
           </div>
 
           <div className="card p-6 sm:p-7 text-center flex flex-col items-center justify-center hover:border-cyan-500/40 transition-all">
             <div className="flex items-center justify-center gap-2 text-xs text-slate-400 font-mono uppercase tracking-widest mb-2">
               <Shield size={16} className="text-cyan-400" />
-              <span>Cells Broken</span>
+              <span>Solved Issues</span>
             </div>
             <div
               className={`font-black font-mono text-white tracking-tight ${
                 projectorMode ? 'text-4xl sm:text-6xl' : 'text-3xl sm:text-5xl'
               }`}
             >
-              {totalEscapes}
+              {totalSolvedIssues}
+            </div>
+          </div>
+
+          <div className="card p-6 sm:p-7 text-center flex flex-col items-center justify-center hover:border-purple-500/40 transition-all">
+            <div className="flex items-center justify-center gap-2 text-xs text-slate-400 font-mono uppercase tracking-widest mb-2">
+              <GitMerge size={16} className="text-purple-400" />
+              <span>Final PRs Submitted</span>
+            </div>
+            <div
+              className={`font-black font-mono text-white tracking-tight ${
+                projectorMode ? 'text-4xl sm:text-6xl' : 'text-3xl sm:text-5xl'
+              }`}
+            >
+              {totalPrsSubmitted} <span className="text-slate-600 text-2xl font-normal">/ {maxPossiblePRs}</span>
             </div>
           </div>
 
           <div className="card p-6 sm:p-7 text-center flex flex-col items-center justify-center hover:border-emerald-500/40 transition-all">
             <div className="flex items-center justify-center gap-2 text-xs text-slate-400 font-mono uppercase tracking-widest mb-2">
               <Zap size={16} className="text-emerald-400" />
-              <span>Total Score</span>
+              <span>Total Team Score</span>
             </div>
             <div
               className={`font-black font-mono text-emerald-400 tracking-tight ${
                 projectorMode ? 'text-4xl sm:text-6xl' : 'text-3xl sm:text-5xl'
               }`}
             >
-              {totalXP.toLocaleString()}
+              {totalTeamScore.toLocaleString()}
             </div>
           </div>
         </section>
@@ -303,19 +314,24 @@ export default function LeaderboardPage() {
           <div className="w-full card p-16 my-10">
             <LoadingState message="SUBSCRIBING TO FIRESTORE TELEMETRY..." />
           </div>
-        ) : participants.length === 0 ? (
+        ) : teams.length === 0 ? (
           <div className="w-full card p-16 my-10 flex flex-col items-center justify-center">
             <EmptyState
-              title="NO ESCAPES RECORDED YET"
-              description="No participants have registered scores yet. As PRs merge and issues resolve, the live leaderboard will update automatically."
+              title="NO SQUADS RECORDED YET"
+              description="No teams have registered scores yet. As PRs merge and issues resolve, the live team leaderboard will update automatically."
               icon={<Trophy size={42} />}
             />
           </div>
         ) : (
           <>
+            {/* Top Awards Showcase */}
+            {!searchQuery && (
+              <AwardsShowcase teams={teams} onSelectTeam={setSelectedTeam} />
+            )}
+
             {/* Top 3 Podium (Shown Prominently for Distance Reading) */}
             {!searchQuery && (
-              <section className="w-full my-8 sm:my-14">
+              <section className="w-full my-6 sm:my-10">
                 <div className="flex items-center justify-between mb-6 px-2">
                   <div className="flex items-center gap-3">
                     <Trophy size={20} className="text-[#FF1E46]" />
@@ -324,18 +340,18 @@ export default function LeaderboardPage() {
                         projectorMode ? 'text-base sm:text-xl' : 'text-sm sm:text-base'
                       }`}
                     >
-                      SECTOR APEX // TOP ESCAPED
+                      SECTOR APEX // TOP SQUADS
                     </h2>
                   </div>
                   <span className="text-xs sm:text-sm text-slate-500 font-mono">
                     Deterministic Ranks #1 – #3
                   </span>
                 </div>
-                <Podium participants={participants} />
+                <Podium teams={teams} />
               </section>
             )}
 
-            {/* Complete Participant Table */}
+            {/* Complete Squad Table */}
             <section className="w-full my-8 sm:my-12 space-y-6">
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
                 <div>
@@ -344,9 +360,9 @@ export default function LeaderboardPage() {
                       projectorMode ? 'text-2xl sm:text-3xl' : 'text-xl sm:text-2xl'
                     }`}
                   >
-                    <span>CELL ROSTER</span>
+                    <span>SQUAD ROSTER</span>
                     <span className="text-xs sm:text-sm font-normal px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
-                      {filteredParticipants.length} of {participants.length} Prisoners
+                      {filteredTeams.length} of {teams.length} Squads
                     </span>
                   </h2>
                 </div>
@@ -358,18 +374,26 @@ export default function LeaderboardPage() {
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search by name or @github..."
+                    placeholder="Search by squad, repository, or student..."
                     className="w-full pl-11 pr-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs sm:text-sm font-mono text-white placeholder:text-slate-500 focus:outline-none focus:border-[#FF0A3B]/60 focus:ring-1 focus:ring-[#FF0A3B]/40 transition-all shadow-inner"
                   />
                 </div>
               </div>
 
-              {/* Leaderboard Table with 7 Columns */}
+              {/* Leaderboard Table with Team Columns */}
               <LeaderboardTable
-                participants={filteredParticipants}
+                teams={filteredTeams}
                 projectorMode={projectorMode}
+                onSelectTeam={setSelectedTeam}
               />
             </section>
+
+            {/* Team Details Modal */}
+            <TeamDetailModal
+              team={selectedTeam}
+              isOpen={Boolean(selectedTeam)}
+              onClose={() => setSelectedTeam(null)}
+            />
           </>
         )}
       </main>

@@ -35,28 +35,28 @@ export default function StatCard({
   const a = ACCENT_MAP[accent] ?? ACCENT_MAP.green;
 
   return (
-    <div className={`card p-5 relative overflow-hidden transition-all duration-200 hover:-translate-y-0.5 border ${a.border}`}>
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+    <div className={`card p-6 sm:p-7 relative overflow-hidden transition-all duration-200 hover:-translate-y-0.5 border ${a.border}`}>
+      <div className="flex items-center justify-between gap-3 mb-3 sm:mb-4">
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider truncate" title={title}>
           {title}
         </span>
-        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${a.text} ${a.bg}`}>
+        <div className={`w-8 h-8 rounded-lg shrink-0 flex items-center justify-center ${a.text} ${a.bg}`}>
           {icon}
         </div>
       </div>
 
-      <div className="text-3xl font-extrabold font-mono text-white tracking-tight mb-1">
+      <div className="text-3xl sm:text-4xl font-black font-mono text-white tracking-tight mb-2">
         {value}
       </div>
 
-      <div className="flex items-center gap-2 text-xs">
+      <div className="flex items-center gap-2 text-[11px] sm:text-xs truncate">
         {delta && (
-          <span className={`font-semibold font-mono ${deltaUp ? 'text-emerald-400' : 'text-rose-400'}`}>
+          <span className={`font-semibold font-mono shrink-0 ${deltaUp ? 'text-emerald-400' : 'text-rose-400'}`}>
             {deltaUp ? '↑' : '↓'} {delta}
           </span>
         )}
         {subtitle && (
-          <span className="text-slate-400 text-xs">{subtitle}</span>
+          <span className="text-slate-400 truncate" title={subtitle}>{subtitle}</span>
         )}
       </div>
     </div>

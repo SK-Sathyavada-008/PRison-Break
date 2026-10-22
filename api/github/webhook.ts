@@ -326,14 +326,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const prId = `pr_${matchedRepoId}_${prNumber}`;
         const now = new Date().toISOString();
 
-        // 1. Identify linked challenge issue
+        // 1. Identify all linked challenge issues (Student PR may contain solutions to multiple assigned issues)
         const fullPRText = `${pr.title || ''} ${pr.body || ''}`;
-        const keywordMatch = fullPRText.match(/(?:fixes|closed|closes|fixed|resolves|resolved|challenge|issue|task)\s*#?(\d+)/i);
-        const urlMatch = fullPRText.match(/\/issues\/(\d+)/i);
-        const hashMatch = fullPRText.match(/#(\d+)/);
-        const issueNumber = keywordMatch
-          ? parseInt(keywordMatch[1], 10)
-          : (urlMatch ? parseInt(urlMatch[1], 10) : (hashMatch ? parseInt(hashMatch[1], 10) : 0));
+        const foundIssues = new Set<number>();
+        const keywordBlockRegex = /(?:fixes|closed|closes|fixed|resolves|resolved|challenge|issue|task)\s*([#\d\s,;&and]+)/gi;
+        let blockMatch: RegExpExecArray | null;
+        while ((blockMatch = keywordBlockRegex.exec(fullPRText)) !== null) {
+          const numbersInBlock = blockMatch[1].match(/\d+/g);
+          if (numbersInBlock) {
+            numbersInBlock.forEach((numStr) => {
+              const n = parseInt(numStr, 10);
+              if (n > 0) foundIssues.add(n);
+            });
+          }
+        }
+        const urlRegex = /\/issues\/(\d+)/gi;
+        let urlMatch: RegExpExecArray | null;
+        while ((urlMatch = urlRegex.exec(fullPRText)) !== null) {
+          const n = parseInt(urlMatch[1], 10);
+          if (n > 0) foundIssues.add(n);
+        }
+        const hashRegex = /#(\d+)/g;
+        let hashMatch: RegExpExecArray | null;
+        while ((hashMatch = hashRegex.exec(fullPRText)) !== null) {
+          const n = parseInt(hashMatch[1], 10);
+          if (n > 0) foundIssues.add(n);
+        }
+
+        const issueNumbers = Array.from(foundIssues).sort((a, b) => a - b);
+        const issueNumber = issueNumbers.length > 0 ? issueNumbers[0] : 0;
 
         // 2. Collect PR labels & issue labels
         const prLabels: string[] = (pr.labels || []).map((l: any) => l.name);
@@ -343,6 +364,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const participantRegistered = !pSnap.empty;
         const participantData = !pSnap.empty ? pSnap.docs[0].data() : null;
         const participantActive = participantRegistered && participantData?.active !== false;
+
+        // Check for 1 final PR per student constraint
+        const priorPRQuery = query(
+          collection(db, 'pullRequests'),
+          where('repositoryId', '==', matchedRepoId),
+          where('githubUsername', '==', author)
+        );
+        const priorPRSnap = await getDocs(priorPRQuery);
+        const existingPRsFromAuthor = priorPRSnap.docs.filter((d) => d.id !== prId);
+        const isMultiplePRViolation = existingPRsFromAuthor.length > 0;
 
         // 4. Validate changed files & security boundaries
         const additions = pr.additions || 0;
@@ -371,7 +402,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const validationChecks = {
           participantRegistered: participantRegistered && participantActive,
           repositoryRegistered: repoExists && isRepoActive,
-          issueValid: issueNumber > 0,
+          issueValid: issueNumbers.length > 0,
           testsPassed,
           filesValid: filesValid && !hasBlockingLabel,
         };
@@ -390,10 +421,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           validationReasons.push(`Repository "${repoFullName}" is inactive or unregistered.`);
         }
 
-        if (validationChecks.issueValid) {
-          validationReasons.push(`Linked challenge issue #${issueNumber} confirmed.`);
+        if (issueNumbers.length > 0) {
+          validationReasons.push(`Solved challenge issue(s) confirmed: [${issueNumbers.map((n) => `#${n}`).join(', ')}].`);
         } else {
           validationReasons.push('No valid challenge issue referenced in title or body.');
+        }
+
+        if (isMultiplePRViolation) {
+          validationReasons.push(`Note: Student @${author} previously submitted another PR in this repository.`);
         }
 
         if (validationChecks.testsPassed) {
@@ -411,10 +446,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           validationChecks.testsPassed &&
           validationChecks.filesValid;
 
-        // 9. Determine PR Processing State
+        // 9. Determine PR Processing State (Enforce One PR Per Student Rule)
         let prStatus: 'AUTO_APPROVED' | 'PENDING_REVIEW' | 'REJECTED' | 'MERGED' = 'PENDING_REVIEW';
         if (isMerged) {
           prStatus = 'MERGED';
+        } else if (isMultiplePRViolation || pr.draft === true) {
+          // One-PR rule violation or draft PR -> Flagged for review; 0 points awarded
+          prStatus = 'PENDING_REVIEW';
         } else if (allChecksPass) {
           prStatus = 'AUTO_APPROVED';
         } else if (!validationChecks.participantRegistered || !validationChecks.repositoryRegistered) {
@@ -423,25 +461,57 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           prStatus = 'PENDING_REVIEW';
         }
 
-        // 10. Auto-Merge Policy:
-        // Do not auto-merge if tests are failing.
-        // Do not auto-merge if the PR has no valid challenge issue.
-        // Do not auto-merge if the participant is not registered.
-        // Do not auto-merge inactive/unregistered repositories.
-        // Do not auto-merge if suspicious unrelated files are modified.
-        const canAutoMerge =
-          allChecksPass &&
-          prStatus === 'AUTO_APPROVED' &&
-          !isMerged &&
-          process.env.AUTO_MERGE_POLICY === 'true';
+        // 11. Resolve Team for repository (e.g. squard_1 -> Squad 1)
+        const teamSlug = matchedRepoId.toLowerCase().replace(/^repo_/, '');
+        const teamId = `team_${teamSlug}`;
+        const teamDocRef = doc(db, 'teams', teamId);
+        const teamSnap = await getDoc(teamDocRef);
+        let teamData: any = teamSnap.exists() ? teamSnap.data() : null;
 
-        if (canAutoMerge) {
-          isMerged = true;
-          prStatus = 'MERGED';
-          validationReasons.push('Auto-merge policy satisfied: PR automatically merged into base branch.');
+        if (!teamData) {
+          // Check if any team has repositoryId == matchedRepoId
+          const allTeamsSnap = await getDocs(collection(db, 'teams'));
+          const foundTeamDoc = allTeamsSnap.docs.find((d) => {
+            const td = d.data();
+            return td.repositoryId === matchedRepoId || td.repositoryName?.toLowerCase() === teamSlug;
+          });
+          if (foundTeamDoc) {
+            teamData = foundTeamDoc.data();
+          }
         }
 
-        // Upsert PR document with Phase 8 validation checks & reasons
+        // Auto-create Squad if not present
+        if (!teamData) {
+          const squadMatch = teamSlug.match(/(\d+)/);
+          const squadNumber = squadMatch ? squadMatch[1] : '1';
+          teamData = {
+            id: teamId,
+            name: `Squad ${squadNumber}`,
+            repositoryId: matchedRepoId,
+            repositoryName: teamSlug,
+            repositoryFullName: repoFullName,
+            members: [
+              {
+                studentId: `s_${author.toLowerCase()}`,
+                name: author,
+                githubUsername: author,
+                assignedIssues: issueNumbers,
+                prSubmitted: true,
+                prNumber,
+              },
+            ],
+            totalScore: 0,
+            solvedIssues: [],
+            validatedIssueCount: 0,
+            prsSubmitted: 1,
+            active: true,
+            createdAt: now,
+            updatedAt: now,
+          };
+          await setDoc(teamDocRef, teamData);
+        }
+
+        // Upsert PR document
         const prDocRef = doc(db, 'pullRequests', prId);
         await setDoc(
           prDocRef,
@@ -449,12 +519,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             id: prId,
             repositoryId: matchedRepoId,
             repositoryFullName: repoFullName,
+            teamId,
             prNumber,
             githubUsername: author,
             issueNumber,
+            issueNumbers,
+            hasMultiplePRViolation: isMultiplePRViolation,
+            duplicateSubmissionWarning: isMultiplePRViolation,
+            attributionWarnings: isMultiplePRViolation ? ['DUPLICATE_PR_VIOLATION: Student already submitted another competition PR.'] : [],
             title: pr.title || `PR #${prNumber}`,
             status: prStatus,
             processingState: prStatus,
+            baseBranch: pr.base?.ref || 'main',
+            headBranch: pr.head?.ref || '',
+            baseCommitSha: pr.base?.sha || '',
+            headCommitSha: pr.head?.sha || '',
+            isDraft: pr.draft === true,
             testsPassed: validationChecks.testsPassed,
             correct: prStatus === 'AUTO_APPROVED' || prStatus === 'MERGED',
             merged: isMerged,
@@ -476,142 +556,156 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           { merge: true }
         );
 
-        // If AUTO_APPROVED or MERGED, run deterministic scoring engine
-        if (prStatus === 'AUTO_APPROVED' || prStatus === 'MERGED') {
+        // 12. If AUTO_APPROVED or MERGED, score non-duplicated issues (Never score draft or duplicate PRs)
+        if ((prStatus === 'AUTO_APPROVED' || prStatus === 'MERGED') && !isMultiplePRViolation && pr.draft !== true) {
           let participantId = `p_${author.toLowerCase()}`;
-          let participantData: any = null;
+          let participantDocData: any = participantData;
 
-          if (!pSnap.empty) {
-            participantId = pSnap.docs[0].id;
-            participantData = pSnap.docs[0].data();
-          } else {
-            participantData = {
+          if (!participantDocData) {
+            participantDocData = {
               id: participantId,
               name: author,
               githubUsername: author,
+              teamId,
+              teamName: teamData.name,
               totalScore: 0,
               prCount: 1,
-              mergedPrCount: 0,
-              escapedCells: 0,
-              firstSuccessfulPr: null,
+              mergedPrCount: isMerged ? 1 : 0,
+              escapedCells: isMerged ? 1 : 0,
+              firstSuccessfulPr: isMerged ? now : null,
               active: true,
               createdAt: now,
               updatedAt: now,
             };
-            await setDoc(doc(db, 'participants', participantId), participantData);
+            await setDoc(doc(db, 'participants', participantId), participantDocData);
           }
 
-          const hasPriorFirstPR = !!participantData?.firstSuccessfulPr;
-          const repoSlug = matchedRepoId.replace(/[^a-zA-Z0-9_-]/g, '_');
-
-          // Evaluate deterministic rules
-          const rulesToAward: Array<{ key: string; points: number; label: string; idKey: string }> = [];
-
-          // 1. Correct PR (+10)
-          rulesToAward.push({
-            key: 'CORRECT_PR',
-            points: 10,
-            label: 'Correct PR',
-            idKey: `se_${repoSlug}_pr_${prNumber}_correct`,
-          });
-
-          // 2. Difficult issue (+20)
-          const isDifficult = prLabels.some(
-            (l) => l.includes('difficulty:hard') || l.includes('difficulty:medium') || l.includes('points:20')
+          // Non-duplicated issue scoring across the squad
+          const existingTeamSolvedIssueNumbers = new Set<number>(
+            (teamData.solvedIssues || []).map((s: any) => s.issueNumber)
           );
-          if (isDifficult) {
-            rulesToAward.push({
-              key: 'DIFFICULT_ISSUE',
-              points: 20,
-              label: 'Difficult issue',
-              idKey: `se_${repoSlug}_pr_${prNumber}_difficult_issue`,
-            });
-          }
 
-          // 3. PR merged (+15)
-          if (isMerged) {
-            rulesToAward.push({
-              key: 'PR_MERGED',
-              points: 15,
-              label: 'PR merged',
-              idKey: `se_${repoSlug}_pr_${prNumber}_merged`,
-            });
-          }
-
-          // 4. First successful PR (+10)
-          if (!hasPriorFirstPR) {
-            rulesToAward.push({
-              key: 'FIRST_SUCCESSFUL_PR',
-              points: 10,
-              label: 'First successful PR',
-              idKey: `se_${author.toLowerCase()}_first_pr`,
-            });
-          }
-
-          // 5. Documentation contribution (+10)
-          const isDocs = prLabels.some((l) => l.includes('documentation') || l.includes('type:documentation'));
-          if (isDocs) {
-            rulesToAward.push({
-              key: 'DOCS_CONTRIBUTION',
-              points: 10,
-              label: 'Documentation contribution',
-              idKey: `se_${repoSlug}_pr_${prNumber}_docs`,
-            });
-          }
-
-          // 6. Fixing a difficult bug (+25)
-          const isBug = prLabels.some((l) => l.includes('bug') || l.includes('type:bug'));
-          const isHard = prLabels.some((l) => l.includes('difficulty:hard') || l.includes('points:25'));
-          if ((isBug && isHard) || prLabels.some((l) => l.includes('points:25'))) {
-            rulesToAward.push({
-              key: 'DIFFICULT_BUG_FIX',
-              points: 25,
-              label: 'Fixing a difficult bug',
-              idKey: `se_${repoSlug}_pr_${prNumber}_difficult_bug`,
-            });
-          }
-
-          // Write scoreEvents idempotently
           let totalNewPoints = 0;
-          for (const rule of rulesToAward) {
-            const eventDocRef = doc(db, 'scoreEvents', rule.idKey);
+          const newlySolvedIssues: any[] = [];
+
+          for (const num of issueNumbers) {
+            if (num <= 0) continue;
+            // Prevent duplicate issue scoring across the squad
+            if (existingTeamSolvedIssueNumbers.has(num)) {
+              continue;
+            }
+
+            // Determine difficulty & points from trusted labels: Easy(10), Medium(20), Hard(30), Very Hard(40)
+            const trustedLabels = prLabels.map((l: string) => l.toLowerCase());
+            let difficulty = 'EASY';
+            let points = 10;
+
+            if (trustedLabels.includes('difficulty:very-hard') || trustedLabels.includes('difficulty:very_hard') || trustedLabels.includes('points:40')) {
+              difficulty = 'VERY_HARD';
+              points = 40;
+            } else if (trustedLabels.includes('difficulty:hard') || trustedLabels.includes('points:30')) {
+              difficulty = 'HARD';
+              points = 30;
+            } else if (trustedLabels.includes('difficulty:medium') || trustedLabels.includes('points:20')) {
+              difficulty = 'MEDIUM';
+              points = 20;
+            }
+
+            const idempotencyKey = `se_${teamId}_issue_${num}`;
+            const eventDocRef = doc(db, 'scoreEvents', idempotencyKey);
             const evSnap = await getDoc(eventDocRef);
 
             if (!evSnap.exists()) {
               await setDoc(eventDocRef, {
-                id: rule.idKey,
+                id: idempotencyKey,
+                teamId,
+                teamName: teamData.name,
                 participantId,
-                participantName: participantData?.name || author,
+                participantName: participantDocData.name || author,
                 githubUsername: author,
-                type: rule.key,
-                points: rule.points,
+                type: `ISSUE_${difficulty}`,
+                points,
                 prNumber,
                 prId,
                 repositoryId: matchedRepoId,
                 repositoryFullName: repoFullName,
-                reason: rule.label,
-                idempotencyKey: rule.idKey,
+                issueNumber: num,
+                reason: `Issue #${num} [${difficulty}]`,
+                idempotencyKey,
                 timestamp: now,
               });
 
-              totalNewPoints += rule.points;
+              totalNewPoints += points;
+              existingTeamSolvedIssueNumbers.add(num);
+              newlySolvedIssues.push({
+                issueNumber: num,
+                difficulty,
+                points,
+                solvedByUsername: author,
+                prNumber,
+                solvedAt: now,
+              });
             }
+          }
+
+          // Update Team aggregate stats
+          if (totalNewPoints > 0 || isMerged || newlySolvedIssues.length > 0) {
+            const updatedSolvedIssues = [...(teamData.solvedIssues || []), ...newlySolvedIssues];
+            const updatedTeamScore = (teamData.totalScore || 0) + totalNewPoints;
+
+            // Update member entry in team
+            const members = teamData.members ? [...teamData.members] : [];
+            const mIdx = members.findIndex((m: any) => m.githubUsername.toLowerCase() === author.toLowerCase());
+            if (mIdx >= 0) {
+              members[mIdx] = {
+                ...members[mIdx],
+                prSubmitted: true,
+                prNumber,
+                score: (members[mIdx].score || 0) + totalNewPoints,
+              };
+            } else {
+              members.push({
+                studentId: `s_${author.toLowerCase()}`,
+                name: author,
+                githubUsername: author,
+                assignedIssues: issueNumbers,
+                prSubmitted: true,
+                prNumber,
+                score: totalNewPoints,
+              });
+            }
+
+            const teamUpdates: any = {
+              totalScore: updatedTeamScore,
+              solvedIssues: updatedSolvedIssues,
+              validatedIssueCount: updatedSolvedIssues.length,
+              members,
+              updatedAt: now,
+            };
+
+            if (isMerged) {
+              teamUpdates.lastMergedAt = now;
+            }
+
+            await updateDoc(doc(db, 'teams', teamData.id || teamId), teamUpdates);
           }
 
           // Update Participant cached totalScore & stats
           if (totalNewPoints > 0 || isMerged) {
-            const curScore = participantData?.totalScore || 0;
-            const curMerged = participantData?.mergedPrCount || 0;
-            const curEscapes = participantData?.escapedCells || 0;
+            const curScore = participantDocData?.totalScore || 0;
+            const curMerged = participantDocData?.mergedPrCount || 0;
+            const curEscapes = participantDocData?.escapedCells || 0;
 
             const pUpdates: any = {
+              teamId,
+              teamName: teamData.name,
               totalScore: curScore + totalNewPoints,
               mergedPrCount: isMerged ? curMerged + 1 : curMerged,
               escapedCells: isMerged ? curEscapes + 1 : curEscapes,
               updatedAt: now,
             };
 
-            if (!hasPriorFirstPR) {
+            if (!participantDocData?.firstSuccessfulPr && isMerged) {
               pUpdates.firstSuccessfulPr = now;
             }
 
@@ -622,6 +716,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const curPRScore = curPRSnap.data()?.score || 0;
             await updateDoc(prDocRef, {
               score: curPRScore + totalNewPoints,
+              solvedIssues: newlySolvedIssues,
               updatedAt: now,
             });
           }

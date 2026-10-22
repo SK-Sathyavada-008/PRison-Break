@@ -16,7 +16,7 @@ import {
 } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../config/firebase';
 import type { PullRequest, FirestorePullRequest, FirestoreRepository, FirestoreParticipant } from '../types';
-import { extractLinkedIssue } from './prValidationPipeline';
+import { extractAllLinkedIssues } from './prValidationPipeline';
 import { scoringEngine } from './scoringEngine';
 import { mapFirestoreToPullRequest } from './pullRequestService';
 import { aiValidationService } from './aiValidationService';
@@ -192,8 +192,9 @@ export const githubSyncService = {
         const prId = `pr_${repoId}_${prNumber}`;
         const labels: string[] = (pr.labels || []).map((l: any) => l.name);
 
-        // Identify linked challenge issue
-        const issueNumber = extractLinkedIssue(pr.title, pr.body);
+        // Identify all linked challenge issues
+        const issueNumbers = extractAllLinkedIssues(pr.title, pr.body);
+        const issueNumber = issueNumbers.length > 0 ? issueNumbers[0] : 0;
 
         // Auto-register participant if missing
         if (isFirebaseConfigured() && author !== 'anonymous') {
@@ -332,6 +333,8 @@ export const githubSyncService = {
           prNumber,
           githubUsername: author,
           issueNumber: issueNumber || 0,
+          issueNumbers,
+          teamId: `team_${repo.toLowerCase()}`,
           title: pr.title || `PR #${prNumber}`,
           status: prStatus,
           processingState,
@@ -371,9 +374,26 @@ export const githubSyncService = {
         if (isFirebaseConfigured()) {
           await setDoc(doc(db, 'pullRequests', prId), sanitizeFirestoreData(firestorePrData), { merge: true });
 
-          // If merged or auto-approved, trigger scoring engine so XP & score events update
+          // If merged or auto-approved, trigger scoring engines so Team & Participant XP update
           if (effectiveMerged || prStatus === 'AUTO_APPROVED') {
             try {
+              // 1. Team-based non-duplicated issue scoring
+              await scoringEngine.processTeamPRScoring({
+                teamId: `team_${repo.toLowerCase()}`,
+                repositoryId: repoId,
+                repositoryFullName: fullName,
+                githubUsername: author,
+                prNumber,
+                prId,
+                solvedIssues: issueNumbers.map((num) => ({
+                  issueNumber: num,
+                  labels,
+                  titleOrBody: `${pr.title} ${pr.body || ''}`,
+                })),
+                merged: effectiveMerged,
+              });
+
+              // 2. Individual scoring compatibility
               await scoringEngine.processPRScoring({
                 prNumber,
                 repositoryId: repoId,

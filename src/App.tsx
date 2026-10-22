@@ -13,6 +13,7 @@ import ParticipantsPage from './pages/admin/ParticipantsPage';
 import RepositoriesPage from './pages/admin/RepositoriesPage';
 import PullRequestsPage from './pages/admin/PullRequestsPage';
 import AdminLeaderboardPage from './pages/admin/AdminLeaderboardPage';
+import TeamsPage from './pages/admin/TeamsPage';
 import ScoreEventsPage from './pages/admin/ScoreEventsPage';
 import WebhookEventsPage from './pages/admin/WebhookEventsPage';
 import SettingsPage from './pages/admin/SettingsPage';
@@ -48,6 +49,9 @@ export default function App() {
           >
             {/* /admin -> Dashboard */}
             <Route index element={<DashboardPage />} />
+
+            {/* /admin/teams — Squad & Issue Assignment Portal */}
+            <Route path="teams" element={<TeamsPage />} />
 
             {/* /admin/participants */}
             <Route path="participants" element={<ParticipantsPage />} />

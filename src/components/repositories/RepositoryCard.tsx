@@ -31,6 +31,15 @@ export default function RepositoryCard({
             <h3 className="font-bold text-sm text-white truncate">
               {repository.name}
             </h3>
+            {(() => {
+              const match = repository.name.match(/squard_?(\d+)/i) || (repository.fullName || '').match(/squard_?(\d+)/i);
+              if (!match) return null;
+              return (
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-[#FF0A3B]/10 border border-[#FF0A3B]/30 text-[#FF5470] shrink-0">
+                  Squad {match[1]}
+                </span>
+              );
+            })()}
           </div>
           <div className="font-mono text-xs text-slate-400 truncate">
             {repository.owner}

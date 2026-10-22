@@ -28,6 +28,10 @@ export const firebaseConfig = {
  * Checks whether Firebase has been configured with real project credentials.
  */
 export function isFirebaseConfigured(): boolean {
+  const procEnv = (globalThis as any).process?.env;
+  if (procEnv?.VITEST || procEnv?.NODE_ENV === 'test') {
+    return false;
+  }
   const { apiKey, projectId } = firebaseConfig;
   return Boolean(
     apiKey &&

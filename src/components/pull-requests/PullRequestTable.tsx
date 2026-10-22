@@ -51,7 +51,7 @@ export default function PullRequestTable({ pullRequests, onInspect }: PullReques
 
               {/* Title */}
               <td>
-                <span className="text-sm font-medium text-white line-clamp-1 max-w-xs" title={pr.title}>
+                <span className="text-sm font-medium text-slate-100 hover:text-white line-clamp-1 max-w-sm xl:max-w-md block" title={pr.title}>
                   {pr.title}
                 </span>
               </td>
@@ -71,15 +71,31 @@ export default function PullRequestTable({ pullRequests, onInspect }: PullReques
                 </div>
               </td>
 
-              {/* Issue */}
+              {/* Issue & Multiple Issues */}
               <td>
-                {pr.issueNumber ? (
-                  <span className="inline-flex items-center gap-1 font-mono text-xs text-amber-400">
-                    <Hash size={11} /> {pr.issueNumber}
-                  </span>
-                ) : (
-                  <span className="text-slate-600 text-xs">—</span>
-                )}
+                <div className="space-y-1">
+                  {pr.solvedIssueNumbers && pr.solvedIssueNumbers.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {pr.solvedIssueNumbers.map((num) => (
+                        <span key={num} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 font-mono text-[11px] font-bold">
+                          <Hash size={10} />{num}
+                        </span>
+                      ))}
+                    </div>
+                  ) : pr.issueNumber ? (
+                    <span className="inline-flex items-center gap-1 font-mono text-xs text-amber-400 font-bold">
+                      <Hash size={11} /> {pr.issueNumber}
+                    </span>
+                  ) : (
+                    <span className="text-slate-600 text-xs">—</span>
+                  )}
+
+                  {(pr.hasMultiplePRViolation || pr.duplicateSubmissionWarning) && (
+                    <span className="inline-block px-1.5 py-0.5 rounded bg-red-500/20 border border-red-500/40 text-red-400 font-mono text-[9px] font-bold uppercase">
+                      Duplicate PR
+                    </span>
+                  )}
+                </div>
               </td>
 
               {/* Status & Validation Checks */}

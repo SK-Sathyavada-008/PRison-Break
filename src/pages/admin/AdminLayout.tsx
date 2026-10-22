@@ -26,26 +26,31 @@ export default function AdminLayout() {
   const meta = PATH_METADATA[currentPath] || { title: 'Warden Portal', breadcrumb: 'Admin' };
 
   return (
-    <div className="min-h-screen bg-[#030712]">
-      {/* Fixed sidebar */}
-      <Sidebar
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-
-      {/* Main area — offset by sidebar width on md+ */}
-      <div className="md:ml-[240px] flex flex-col min-h-screen">
-        {/* Topbar */}
-        <TopBar
-          onMenuToggle={() => setSidebarOpen(!sidebarOpen)}
-          title={meta.title}
-          breadcrumb={meta.breadcrumb}
+    <div className="h-screen w-screen bg-[#030408] text-slate-100 p-2 sm:p-4 lg:p-6 flex flex-col overflow-hidden">
+      {/* Framed Application Container — Inset from all screen edges */}
+      <div className="flex-1 min-h-0 w-full rounded-2xl lg:rounded-3xl border border-slate-800/90 bg-[#070913] flex overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.8)] relative">
+        {/* Sidebar: desktop static flex column, mobile slide-in drawer */}
+        <Sidebar
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
         />
 
-        {/* Page content */}
-        <main className="flex-1 overflow-y-auto">
-          <Outlet />
-        </main>
+        {/* Main content column: takes remaining width with independent scrolling */}
+        <div className="flex-1 min-w-0 flex flex-col h-full overflow-y-auto bg-[#070913]">
+          {/* Sticky TopBar */}
+          <TopBar
+            onMenuToggle={() => setSidebarOpen(!sidebarOpen)}
+            title={meta.title}
+            breadcrumb={meta.breadcrumb}
+          />
+
+          {/* Page content with generous breathing room and max-width scaling */}
+          <main className="flex-1 w-full px-6 sm:px-10 lg:px-12 py-8 sm:py-10 pb-36">
+            <div className="w-full max-w-[1480px] mx-auto">
+              <Outlet />
+            </div>
+          </main>
+        </div>
       </div>
     </div>
   );

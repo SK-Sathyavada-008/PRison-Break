@@ -25,6 +25,12 @@ service cloud.firestore {
     // Writable ONLY by authenticated, authorized admins
     // ─────────────────────────────────────────────
 
+    // Teams Collection (Offline Hackathon Squads)
+    match /teams/{teamId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     // Participants Collection
     match /participants/{participantId} {
       allow read: if true;
@@ -59,6 +65,17 @@ service cloud.firestore {
     match /reviews/{reviewId} {
       allow read: if true;
       allow write: if isAdmin();
+    }
+
+    // Competition Issues Collection (Issue assignments & grading)
+    match /issues/{issueId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Auditable Admin Logs Collection
+    match /auditLogs/{logId} {
+      allow read, write: if isAdmin();
     }
 
     // Admin Credentials

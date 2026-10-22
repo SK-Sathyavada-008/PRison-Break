@@ -20,7 +20,119 @@ import type {
   FirestoreScoreEvent,
   FirestoreReview,
   PRProcessingState,
+  IssueDifficulty,
+  SolvedIssue,
+  FirestoreTeam,
 } from '../types';
+import { ISSUE_DIFFICULTY_POINTS } from '../types';
+import { determineIssueDifficulty } from './prValidationPipeline';
+import {
+  calculateAwardedPoints,
+  roundToTwoDecimals,
+  RUBRIC_VERSION,
+  javaGradingEngine,
+} from './javaGradingEngine';
+
+export { javaGradingEngine, calculateAwardedPoints, roundToTwoDecimals, RUBRIC_VERSION };
+
+// ── TEAM-BASED OFFLINE HACKATHON SCORING CONTEXT ───────────
+
+export interface TeamPREvaluationContext {
+  teamId?: string;
+  repositoryId: string;
+  repositoryFullName?: string;
+  githubUsername: string; // The student author
+  prNumber: number;
+  prId?: string;
+  solvedIssues: Array<{
+    issueNumber: number;
+    difficulty?: IssueDifficulty;
+    labels?: string[];
+    titleOrBody?: string;
+    correctnessScore?: number;
+    codeQualityScore?: number;
+    commitQualityScore?: number;
+  }>;
+  existingTeamSolvedIssueNumbers?: number[];
+  merged?: boolean;
+}
+
+export interface EvaluatedIssueScore {
+  issueNumber: number;
+  difficulty: IssueDifficulty;
+  points: number;
+  basePoints: number;
+  componentScores: { correctness: number; codeQuality: number; commitQuality: number };
+  formula: string;
+  rubricVersion: string;
+  idempotencyKey: string;
+  isDuplicate: boolean;
+  label: string;
+}
+
+/**
+ * Evaluates issue scoring for a team's PR.
+ * Team score is the sum of all validated, non-duplicated issue scores.
+ * Formula: awardedPoints = round2(basePoints * (0.70 * C + 0.20 * Q + 0.10 * M))
+ * Discards any issue already credited to the team.
+ */
+export function evaluateTeamIssueScoring(
+  context: TeamPREvaluationContext
+): {
+  newIssuesToAward: EvaluatedIssueScore[];
+  duplicateIssuesIgnored: number[];
+  totalPoints: number;
+} {
+  const repoSlug = (context.teamId || context.repositoryId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const existingSet = new Set<number>(context.existingTeamSolvedIssueNumbers || []);
+  const newIssuesToAward: EvaluatedIssueScore[] = [];
+  const duplicateIssuesIgnored: number[] = [];
+  let totalPoints = 0;
+
+  for (const item of context.solvedIssues) {
+    const issueNum = item.issueNumber;
+    if (issueNum <= 0) continue;
+
+    // Check if already solved by this team
+    if (existingSet.has(issueNum)) {
+      duplicateIssuesIgnored.push(issueNum);
+      continue;
+    }
+
+    const difficulty: IssueDifficulty =
+      item.difficulty ||
+      determineIssueDifficulty(issueNum, item.labels || [], item.titleOrBody || '');
+    const basePoints = ISSUE_DIFFICULTY_POINTS[difficulty] ?? 10;
+    const c = item.correctnessScore ?? 1.0;
+    const q = item.codeQualityScore ?? 1.0;
+    const m = item.commitQualityScore ?? 1.0;
+
+    const points = calculateAwardedPoints(basePoints, c, q, m);
+    const idempotencyKey = `se_${repoSlug}_issue_${issueNum}`;
+
+    newIssuesToAward.push({
+      issueNumber: issueNum,
+      difficulty,
+      points,
+      basePoints,
+      componentScores: { correctness: c, codeQuality: q, commitQuality: m },
+      formula: 'basePoints * (0.70 * C + 0.20 * Q + 0.10 * M)',
+      rubricVersion: RUBRIC_VERSION,
+      idempotencyKey,
+      isDuplicate: false,
+      label: `Issue #${issueNum} [${difficulty}] (${points}/${basePoints} pts)`,
+    });
+
+    existingSet.add(issueNum);
+    totalPoints = roundToTwoDecimals(totalPoints + points);
+  }
+
+  return {
+    newIssuesToAward,
+    duplicateIssuesIgnored,
+    totalPoints,
+  };
+}
 
 // ── FINAL SCORING RULES CONFIGURATION ───────────────
 
@@ -250,6 +362,217 @@ export function calculateApplicableRules(
 
 export const scoringEngine = {
   /**
+   * Team-based scoring engine:
+   * Credits validated, non-duplicated issue scores to the team.
+   * Enforces that each issue is scored only once across the entire team.
+   */
+  async processTeamPRScoring(context: TeamPREvaluationContext): Promise<{
+    newPointsAwarded: number;
+    eventsCreated: FirestoreScoreEvent[];
+    solvedIssues: SolvedIssue[];
+    teamUpdated: boolean;
+  }> {
+    if (!isFirebaseConfigured()) {
+      return { newPointsAwarded: 0, eventsCreated: [], solvedIssues: [], teamUpdated: false };
+    }
+
+    const now = new Date().toISOString();
+    const repoName = context.repositoryId.replace(/^repo_/, '');
+    const cleanUsername = context.githubUsername.trim().toLowerCase();
+
+    // 1. Locate Team
+    let teamDocRef = null;
+    let teamData: FirestoreTeam | null = null;
+    let teamId = context.teamId;
+
+    if (teamId) {
+      const snap = await getDoc(doc(db, 'teams', teamId));
+      if (snap.exists()) {
+        teamDocRef = doc(db, 'teams', teamId);
+        teamData = snap.data() as FirestoreTeam;
+      }
+    }
+
+    if (!teamData) {
+      // Find team by repositoryId or repositoryName
+      const teamsRef = collection(db, 'teams');
+      const allTeamsSnap = await getDocs(teamsRef);
+      const matched = allTeamsSnap.docs.find((d) => {
+        const t = d.data() as FirestoreTeam;
+        return (
+          t.repositoryId === context.repositoryId ||
+          t.repositoryName?.toLowerCase() === repoName.toLowerCase() ||
+          (t.repositoryFullName || '').toLowerCase() === (context.repositoryFullName || '').toLowerCase() ||
+          t.members?.some((m) => m.githubUsername.toLowerCase() === cleanUsername)
+        );
+      });
+
+      if (matched) {
+        teamDocRef = matched.ref;
+        teamData = matched.data() as FirestoreTeam;
+        teamId = matched.id;
+      }
+    }
+
+    // Auto-create squad if not found (e.g. squard_1)
+    if (!teamData) {
+      teamId = teamId || `team_${repoName.toLowerCase()}`;
+      teamDocRef = doc(db, 'teams', teamId);
+      const squadNumMatch = repoName.match(/(\d+)/);
+      const squadNum = squadNumMatch ? squadNumMatch[1] : '1';
+
+      teamData = {
+        id: teamId,
+        name: `Squad ${squadNum}`,
+        repositoryId: context.repositoryId,
+        repositoryName: repoName,
+        repositoryFullName: context.repositoryFullName || repoName,
+        members: [
+          {
+            studentId: `s_${cleanUsername}`,
+            name: context.githubUsername,
+            githubUsername: context.githubUsername,
+            assignedIssues: context.solvedIssues.map((i) => i.issueNumber),
+            prSubmitted: true,
+            prNumber: context.prNumber,
+          },
+        ],
+        totalScore: 0,
+        solvedIssues: [],
+        validatedIssueCount: 0,
+        correctlySolvedIssuesCount: 0,
+        assignedIssueCount: 4,
+        veryHardSolvedCount: 0,
+        prsSubmitted: 1,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await setDoc(teamDocRef, teamData);
+    }
+
+    if (!teamData || !teamDocRef) {
+      throw new Error(`Failed to resolve or create team for repository: ${repoName}`);
+    }
+
+    const currentTeam: FirestoreTeam = teamData;
+    const currentTeamDocRef = teamDocRef;
+
+    // 2. Evaluate non-duplicated issues
+    const existingTeamSolvedIssueNumbers = (currentTeam.solvedIssues || []).map((s) => s.issueNumber);
+    const evaluation = evaluateTeamIssueScoring({
+      ...context,
+      teamId,
+      existingTeamSolvedIssueNumbers,
+    });
+
+    let newPointsAwarded = 0;
+    const eventsCreated: FirestoreScoreEvent[] = [];
+    const newSolvedIssues: SolvedIssue[] = [];
+
+    // 3. Award each new issue idempotently
+    for (const item of evaluation.newIssuesToAward) {
+      const eventDocRef = doc(db, 'scoreEvents', item.idempotencyKey);
+      const existingSnap = await getDoc(eventDocRef);
+
+      if (existingSnap.exists()) {
+        continue; // Idempotency guarantee
+      }
+
+      const scoreEventDoc: FirestoreScoreEvent = {
+        id: item.idempotencyKey,
+        teamId,
+        teamName: currentTeam.name,
+        participantId: `p_${cleanUsername}`,
+        participantName: context.githubUsername,
+        githubUsername: context.githubUsername,
+        type: `ISSUE_${item.difficulty}`,
+        points: item.points,
+        basePoints: item.basePoints,
+        componentScores: item.componentScores,
+        rubricVersion: item.rubricVersion,
+        formula: item.formula,
+        prNumber: context.prNumber,
+        prId: context.prId || `pr_${context.repositoryId}_${context.prNumber}`,
+        repositoryId: context.repositoryId,
+        repositoryFullName: context.repositoryFullName,
+        issueNumber: item.issueNumber,
+        reason: item.label,
+        idempotencyKey: item.idempotencyKey,
+        timestamp: now,
+      };
+
+      await setDoc(eventDocRef, scoreEventDoc);
+      eventsCreated.push(scoreEventDoc);
+      newPointsAwarded = roundToTwoDecimals(newPointsAwarded + item.points);
+
+      newSolvedIssues.push({
+        issueNumber: item.issueNumber,
+        difficulty: item.difficulty,
+        points: item.points,
+        solvedByUsername: context.githubUsername,
+        prNumber: context.prNumber,
+        solvedAt: now,
+      });
+    }
+
+    // 4. Update Team document
+    let teamUpdated = false;
+    if (newPointsAwarded > 0 || context.merged || newSolvedIssues.length > 0) {
+      const updatedSolvedIssues = [...(currentTeam.solvedIssues || []), ...newSolvedIssues];
+      const updatedTotalScore = roundToTwoDecimals((currentTeam.totalScore || 0) + newPointsAwarded);
+
+      // Update student member in team members array
+      const members = currentTeam.members ? [...currentTeam.members] : [];
+      let memberIdx = members.findIndex((m) => m.githubUsername.toLowerCase() === cleanUsername);
+      if (memberIdx >= 0) {
+        members[memberIdx] = {
+          ...members[memberIdx],
+          prSubmitted: true,
+          prNumber: context.prNumber,
+          score: (members[memberIdx].score || 0) + newPointsAwarded,
+        };
+      } else {
+        members.push({
+          studentId: `s_${cleanUsername}`,
+          name: context.githubUsername,
+          githubUsername: context.githubUsername,
+          assignedIssues: newSolvedIssues.map((i) => i.issueNumber),
+          prSubmitted: true,
+          prNumber: context.prNumber,
+          score: newPointsAwarded,
+        });
+      }
+
+      const veryHardSolvedCount = updatedSolvedIssues.filter((s) => s.difficulty === 'VERY_HARD').length;
+
+      const teamUpdates: Partial<FirestoreTeam> = {
+        totalScore: updatedTotalScore,
+        solvedIssues: updatedSolvedIssues,
+        validatedIssueCount: updatedSolvedIssues.length,
+        correctlySolvedIssuesCount: updatedSolvedIssues.length,
+        veryHardSolvedCount,
+        members,
+        updatedAt: now,
+      };
+
+      if (context.merged) {
+        teamUpdates.lastMergedAt = now;
+      }
+
+      await updateDoc(currentTeamDocRef, teamUpdates);
+      teamUpdated = true;
+    }
+
+    return {
+      newPointsAwarded,
+      eventsCreated,
+      solvedIssues: newSolvedIssues,
+      teamUpdated,
+    };
+  },
+
+  /**
    * Applies the scoring engine to a PR idempotently in Firestore.
    * Ensures scoreEvents is the single source of truth.
    * Never modifies participant totalScore without writing score events.
@@ -413,6 +736,28 @@ export const scoringEngine = {
       prLabels: pr.labels,
     });
 
+    // 1b. Process Team-based Issue Deduplication & Scoring
+    const teamResult = await this.processTeamPRScoring({
+      repositoryId: pr.repositoryId,
+      repositoryFullName: pr.repositoryFullName || pr.repositoryId,
+      githubUsername: pr.githubUsername,
+      prNumber: pr.prNumber,
+      prId: pr.id,
+      solvedIssues: (pr.solvedIssueNumbers && pr.solvedIssueNumbers.length > 0
+        ? pr.solvedIssueNumbers
+        : (pr.issueNumber ? [pr.issueNumber] : [])
+      ).map((n: number) => ({
+        issueNumber: n,
+        difficulty: pr.issueDifficulty,
+        labels: pr.issueLabels,
+      })),
+      merged: pr.merged,
+    });
+
+    const totalPointsAwarded = (teamResult.newPointsAwarded > 0)
+      ? teamResult.newPointsAwarded
+      : scoringResult.newPointsAwarded;
+
     // 2. Update PR state to AUTO_APPROVED / APPROVED
     await updateDoc(doc(db, 'pullRequests', pr.id), {
       status: 'AUTO_APPROVED',
@@ -432,12 +777,12 @@ export const scoringEngine = {
       status: 'APPROVED',
       reason: notes,
       reviewedBy: adminUsername,
-      pointsAwarded: scoringResult.newPointsAwarded,
+      pointsAwarded: totalPointsAwarded,
       createdAt: now,
     };
     await setDoc(doc(db, 'reviews', reviewId), reviewDoc);
 
-    return { pointsAwarded: scoringResult.newPointsAwarded };
+    return { pointsAwarded: totalPointsAwarded };
   },
 
   /**
@@ -504,6 +849,28 @@ export const scoringEngine = {
       prLabels: pr.labels,
     });
 
+    // 1b. Process Team-based Issue Deduplication & Scoring
+    const teamResult = await this.processTeamPRScoring({
+      repositoryId: pr.repositoryId,
+      repositoryFullName: pr.repositoryFullName || pr.repositoryId,
+      githubUsername: pr.githubUsername,
+      prNumber: pr.prNumber,
+      prId: pr.id,
+      solvedIssues: (pr.solvedIssueNumbers && pr.solvedIssueNumbers.length > 0
+        ? pr.solvedIssueNumbers
+        : (pr.issueNumber ? [pr.issueNumber] : [])
+      ).map((n: number) => ({
+        issueNumber: n,
+        difficulty: pr.issueDifficulty,
+        labels: pr.issueLabels,
+      })),
+      merged: true,
+    });
+
+    const totalPointsAwarded = (teamResult.newPointsAwarded > 0)
+      ? teamResult.newPointsAwarded
+      : scoringResult.newPointsAwarded;
+
     // 2. Update PR state to MERGED
     await updateDoc(doc(db, 'pullRequests', pr.id), {
       status: 'MERGED',
@@ -523,12 +890,12 @@ export const scoringEngine = {
       status: 'FORCE_MERGED',
       reason: mergeReason,
       reviewedBy: adminUsername,
-      pointsAwarded: scoringResult.newPointsAwarded,
+      pointsAwarded: totalPointsAwarded,
       createdAt: now,
     };
     await setDoc(doc(db, 'reviews', reviewId), reviewDoc);
 
-    return { pointsAwarded: scoringResult.newPointsAwarded };
+    return { pointsAwarded: totalPointsAwarded };
   },
 
   /**

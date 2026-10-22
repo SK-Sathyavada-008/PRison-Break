@@ -95,8 +95,19 @@ export default function RepositoryTable({
                       <Code2 size={15} />
                     </div>
                     <div className="min-w-0">
-                      <div className="font-semibold text-sm text-slate-100 truncate group-hover:text-emerald-300 transition-colors">
-                        {repo.name}
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm text-slate-100 truncate group-hover:text-emerald-300 transition-colors">
+                          {repo.name}
+                        </span>
+                        {(() => {
+                          const match = repo.name.match(/squard_?(\d+)/i) || (repo.fullName || '').match(/squard_?(\d+)/i);
+                          if (!match) return null;
+                          return (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-[#FF0A3B]/10 border border-[#FF0A3B]/30 text-[#FF5470] shrink-0">
+                              Squad {match[1]}
+                            </span>
+                          );
+                        })()}
                       </div>
                       <div className="font-mono text-[11px] text-slate-500 truncate">
                         {repo.fullName ?? `${repo.owner}/${repo.name}`}

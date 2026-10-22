@@ -24,6 +24,7 @@ interface SidebarProps {
 
 const NAV_ITEMS = [
   { path: '/admin',              exact: true,  label: 'Dashboard',     icon: LayoutDashboard },
+  { path: '/admin/teams',        exact: false, label: 'Squad Teams',   icon: Shield },
   { path: '/admin/participants', exact: false, label: 'Participants',   icon: Users },
   { path: '/admin/repositories', exact: false, label: 'Repositories',   icon: Folder },
   { path: '/admin/pull-requests',exact: false, label: 'Pull Requests',  icon: GitPullRequest },
@@ -46,7 +47,11 @@ export default function Sidebar({ isOpen = true, onClose }: SidebarProps) {
         />
       )}
 
-      <aside className={`sidebar z-50 ${isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+      <aside
+        className={`w-64 shrink-0 bg-[#080A12] border-r border-slate-800/80 flex flex-col h-full transition-transform duration-200 z-50 fixed inset-y-0 left-0 shadow-2xl md:static md:translate-x-0 md:shadow-none md:z-auto ${
+          isOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
         {/* Brand Header */}
         <div className="p-5 border-b border-slate-800">
           <div className="flex items-center justify-between">

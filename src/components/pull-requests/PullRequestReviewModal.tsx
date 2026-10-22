@@ -25,9 +25,20 @@ import {
   Sparkles,
   Bot,
   Loader2,
+  Code,
+  GitCommit,
+  FileCode,
+  GitBranch,
+  MessageSquare,
 } from 'lucide-react';
 import type { PullRequest } from '../../types';
+import { ISSUE_DIFFICULTY_POINTS } from '../../types';
 import { scoringEngine, SCORING_RULES } from '../../services/scoringEngine';
+import {
+  calculateAwardedPoints,
+  RUBRIC_VERSION,
+} from '../../services/javaGradingEngine';
+import { offlinePRValidationService } from '../../services/offlinePRValidationService';
 import { aiValidationService, type AIValidationResult } from '../../services/aiValidationService';
 import StatusBadge from '../ui/StatusBadge';
 import { useAuth } from '../../context/AuthContext';
@@ -48,7 +59,7 @@ export default function PullRequestReviewModal({
   const { currentUser } = useAuth();
   const adminName = currentUser?.displayName || currentUser?.email || 'admin_warden';
 
-  const [activeTab, setActiveTab] = useState<'inspect' | 'approve' | 'reject' | 'merge' | 'adjust'>('inspect');
+  const [activeTab, setActiveTab] = useState<'inspect' | 'grading' | 'commits' | 'approve' | 'reject' | 'request_review' | 'merge' | 'adjust'>('inspect');
   const [loading, setLoading] = useState(false);
   const [evaluatingAI, setEvaluatingAI] = useState(false);
   const [aiResult, setAiResult] = useState<AIValidationResult | null>(null);
@@ -58,9 +69,16 @@ export default function PullRequestReviewModal({
   // Form states
   const [approveNotes, setApproveNotes] = useState('Deterministic checks verified. Approved by administrator.');
   const [rejectReason, setRejectReason] = useState('');
+  const [requestReviewNotes, setRequestReviewNotes] = useState('');
   const [mergeReason, setMergeReason] = useState('Admin authorized force merge');
   const [scoreDelta, setScoreDelta] = useState<number>(10);
   const [adjustReason, setAdjustReason] = useState('');
+
+  // Phase 3 Java Grading Engine states
+  const [correctnessGrade, setCorrectnessGrade] = useState<number>(1.0);
+  const [codeQualityGrade, setCodeQualityGrade] = useState<number>(0.9);
+  const [commitQualityGrade, setCommitQualityGrade] = useState<number>(1.0);
+  const [gradingExplanation, setGradingExplanation] = useState<string>('Deterministic evaluation against beginner Java syllabus.');
 
   if (!isOpen || !pr) return null;
 
@@ -157,6 +175,34 @@ export default function PullRequestReviewModal({
     } catch (err: any) {
       console.error('[ReviewModal] Reject error:', err);
       setError(err?.message || 'Failed to reject PR');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle Request Review
+  const handleRequestReview = async () => {
+    if (!requestReviewNotes.trim()) {
+      setError('Please provide feedback notes explaining what changes are requested.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await offlinePRValidationService.submitOrganizerReviewAction(
+        pr.id,
+        'REQUEST_REVIEW',
+        adminName,
+        requestReviewNotes.trim()
+      );
+      setSuccessMsg(`PR #${pr.number} marked as Changes Requested. Notes recorded in audit log.`);
+      setTimeout(() => {
+        onActionComplete?.();
+        onClose();
+      }, 1500);
+    } catch (err: any) {
+      console.error('[ReviewModal] Request review error:', err);
+      setError(err?.message || 'Failed to submit review request');
     } finally {
       setLoading(false);
     }
@@ -298,10 +344,25 @@ export default function PullRequestReviewModal({
                 <GitPullRequest size={12} className="text-slate-500" />
                 Repo: <span className="text-slate-300">{pr.repository}</span>
               </span>
-              {pr.issueNumber && (
+              {pr.solvedIssueNumbers && pr.solvedIssueNumbers.length > 0 ? (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-slate-500">Issues:</span>
+                  {pr.solvedIssueNumbers.map((num: number) => (
+                    <span key={num} className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold text-[11px]">
+                      <Hash size={10} />
+                      #{num}
+                    </span>
+                  ))}
+                </div>
+              ) : pr.issueNumber ? (
                 <span className="flex items-center gap-1 text-amber-400">
                   <Hash size={12} />
                   Issue #{pr.issueNumber}
+                </span>
+              ) : null}
+              {pr.issueDifficulty && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FF0A3B]/10 border border-[#FF0A3B]/30 text-[#FF5470]">
+                  {pr.issueDifficulty.toUpperCase()}
                 </span>
               )}
             </div>
@@ -329,6 +390,28 @@ export default function PullRequestReviewModal({
             Signals & Rules
           </button>
           <button
+            onClick={() => setActiveTab('grading')}
+            className={`py-3 px-3 border-b-2 font-medium flex items-center gap-1.5 transition-colors ${
+              activeTab === 'grading'
+                ? 'border-cyan-500 text-cyan-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Award size={14} />
+            Java Grading Engine
+          </button>
+          <button
+            onClick={() => setActiveTab('commits')}
+            className={`py-3 px-3 border-b-2 font-medium flex items-center gap-1.5 transition-colors ${
+              activeTab === 'commits'
+                ? 'border-indigo-500 text-indigo-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <GitCommit size={14} />
+            Offline Commits & Diffs
+          </button>
+          <button
             onClick={() => setActiveTab('approve')}
             className={`py-3 px-3 border-b-2 font-medium flex items-center gap-1.5 transition-colors ${
               activeTab === 'approve'
@@ -349,6 +432,17 @@ export default function PullRequestReviewModal({
           >
             <Ban size={14} />
             Reject PR
+          </button>
+          <button
+            onClick={() => setActiveTab('request_review')}
+            className={`py-3 px-3 border-b-2 font-medium flex items-center gap-1.5 transition-colors ${
+              activeTab === 'request_review'
+                ? 'border-yellow-500 text-yellow-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <MessageSquare size={14} />
+            Request Changes
           </button>
           <button
             onClick={() => setActiveTab('merge')}
@@ -387,6 +481,33 @@ export default function PullRequestReviewModal({
             <div className="p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 flex items-center gap-2 text-emerald-400 font-mono text-xs">
               <Check size={15} className="flex-shrink-0" />
               <span>{successMsg}</span>
+            </div>
+          )}
+
+          {/* Warning Banners for One-PR Violation or Attribution Conflicts */}
+          {(pr.hasMultiplePRViolation || pr.duplicateSubmissionWarning) && (
+            <div className="p-3.5 rounded-xl border border-red-500/40 bg-red-950/30 flex items-start gap-2.5 font-mono text-xs text-red-300">
+              <AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <strong className="block text-red-200 font-bold">
+                  ONE COMPETITION PR RULE VIOLATION
+                </strong>
+                Student @{pr.githubUsername} has submitted multiple competition PRs in this repository. Only exactly one final competition PR per student is allowed. Automated scoring is paused.
+              </div>
+            </div>
+          )}
+
+          {pr.attributionWarnings && pr.attributionWarnings.length > 0 && (
+            <div className="p-3.5 rounded-xl border border-amber-500/40 bg-amber-950/20 space-y-1 font-mono text-xs text-amber-300">
+              <div className="flex items-center gap-2 font-bold text-amber-200">
+                <AlertTriangle size={15} className="text-amber-400" />
+                <span>Attribution & Scope Warnings:</span>
+              </div>
+              <ul className="list-disc list-inside space-y-0.5 text-[11px] text-amber-300/90 pl-1">
+                {pr.attributionWarnings.map((warn, i) => (
+                  <li key={i}>{warn}</li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -620,6 +741,290 @@ export default function PullRequestReviewModal({
             </div>
           )}
 
+          {/* TAB: JAVA GRADING ENGINE (PHASE 3) */}
+          {activeTab === 'grading' && (
+            <div className="space-y-5 font-mono text-xs">
+              <div className="p-4 rounded-xl border border-cyan-500/30 bg-cyan-950/20 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+                      <Award size={16} />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-white text-xs flex items-center gap-2">
+                        <span>Deterministic Java Grading Formula</span>
+                        <span className="text-[10px] font-normal text-cyan-300 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+                          {RUBRIC_VERSION}
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-slate-400">
+                        Formula: <code>awardedPoints = basePoints * (0.70*C + 0.20*Q + 0.10*M)</code>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <span className="text-xs text-slate-400 block">Calculated Award:</span>
+                    <span className="text-lg font-bold text-cyan-400">
+                      +{calculateAwardedPoints(
+                        ISSUE_DIFFICULTY_POINTS[pr.issueDifficulty || 'EASY'] || 10,
+                        correctnessGrade,
+                        codeQualityGrade,
+                        commitQualityGrade
+                      )}{' '}
+                      / {ISSUE_DIFFICULTY_POINTS[pr.issueDifficulty || 'EASY'] || 10} pts
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                  {/* Correctness Component */}
+                  <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 size={13} />
+                        Correctness (C: 70%)
+                      </span>
+                      <span className="font-bold text-white">{(correctnessGrade * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={correctnessGrade}
+                      onChange={(e) => setCorrectnessGrade(parseFloat(e.target.value))}
+                      className="w-full accent-emerald-500 cursor-pointer"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Reproducible tests: compilation, normal inputs, and boundary edge cases.
+                    </p>
+                  </div>
+
+                  {/* Code Quality Component */}
+                  <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-cyan-400 flex items-center gap-1">
+                        <Code size={13} />
+                        Code Quality (Q: 20%)
+                      </span>
+                      <span className="font-bold text-white">{(codeQualityGrade * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={codeQualityGrade}
+                      onChange={(e) => setCodeQualityGrade(parseFloat(e.target.value))}
+                      className="w-full accent-cyan-500 cursor-pointer"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Beginner syllabus: variables, control flow, methods, scope discipline.
+                    </p>
+                  </div>
+
+                  {/* Commit Quality Component */}
+                  <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-purple-400 flex items-center gap-1">
+                        <GitCommit size={13} />
+                        Commit Quality (M: 10%)
+                      </span>
+                      <span className="font-bold text-white">{(commitQualityGrade * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={commitQualityGrade}
+                      onChange={(e) => setCommitQualityGrade(parseFloat(e.target.value))}
+                      className="w-full accent-purple-500 cursor-pointer"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Traceable commits referencing issue. Author verification check.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Beginner Syllabus Rubric Standards Note */}
+                <div className="p-3 rounded-lg border border-slate-800 bg-slate-900/60 text-[11px] text-slate-300 space-y-1">
+                  <div className="text-amber-400 font-bold flex items-center gap-1.5">
+                    <AlertTriangle size={13} />
+                    Beginner Evaluation Standard (2-Month Syllabus)
+                  </div>
+                  <ul className="list-disc list-inside text-slate-400 text-[10px] space-y-0.5">
+                    <li>Harmless formatting and whitespace differences are NEVER penalized.</li>
+                    <li>Advanced enterprise patterns or reflection are NOT required or rewarded.</li>
+                    <li>More commits do NOT inflate the score (commit count is non-monotonic).</li>
+                    <li>Attribution conflicts and test tampering attempts are immediately flagged.</li>
+                  </ul>
+                </div>
+
+                {/* Audit explanation */}
+                <div className="space-y-1">
+                  <label className="text-slate-400 font-semibold uppercase tracking-wider text-[11px]">
+                    Grading Explanation / Audit Rationale *
+                  </label>
+                  <textarea
+                    value={gradingExplanation}
+                    onChange={(e) => setGradingExplanation(e.target.value)}
+                    rows={2}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
+                    placeholder="Enter deterministic grading breakdown or rationale..."
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-2">
+                  <button
+                    onClick={() => setActiveTab('inspect')}
+                    className="px-4 py-2 rounded-lg border border-slate-800 text-slate-400 hover:text-white"
+                  >
+                    Back to Signals
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const basePts = ISSUE_DIFFICULTY_POINTS[pr.issueDifficulty || 'EASY'] || 10;
+                      const awarded = calculateAwardedPoints(
+                        basePts,
+                        correctnessGrade,
+                        codeQualityGrade,
+                        commitQualityGrade
+                      );
+                      setLoading(true);
+                      try {
+                        await scoringEngine.adjustScoreWithAudit(
+                          '',
+                          pr.githubUsername,
+                          awarded,
+                          adminName,
+                          `[Phase 3 Java Rubric: C=${(correctnessGrade * 100).toFixed(0)}%, Q=${(codeQualityGrade * 100).toFixed(0)}%, M=${(commitQualityGrade * 100).toFixed(0)}%]: ${gradingExplanation}`,
+                          pr.id,
+                          pr.number
+                        );
+                        setSuccessMsg(`Graded PR #${pr.number}: Awarded ${awarded} pts to @${pr.githubUsername}.`);
+                        setTimeout(() => {
+                          onActionComplete?.();
+                          onClose();
+                        }, 1200);
+                      } catch (err: any) {
+                        setError(err?.message || 'Failed to submit grade');
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                    disabled={loading || !gradingExplanation.trim()}
+                    className="px-5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <Award size={15} />
+                    {loading ? 'Submitting Grade...' : 'Commit Deterministic Grade'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: OFFLINE COMMITS & DIFFS (PHASE 4) */}
+          {activeTab === 'commits' && (
+            <div className="space-y-5 font-mono text-xs">
+              {/* Branch and Commit Summary */}
+              <div className="p-3.5 rounded-xl border border-indigo-500/30 bg-indigo-950/20 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <GitBranch size={16} className="text-indigo-400" />
+                  <span className="text-slate-300">
+                    <span className="text-indigo-300 font-bold">{pr.headBranch || 'offline-branch'}</span>
+                    {' → '}
+                    <span className="text-emerald-300 font-bold">{pr.baseBranch || 'main'}</span>
+                  </span>
+                </div>
+                {pr.headCommitSha && (
+                  <div className="text-[11px] text-slate-400">
+                    Head SHA: <code className="text-slate-200 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">{pr.headCommitSha.substring(0, 7)}</code>
+                  </div>
+                )}
+              </div>
+
+              {/* Commits List */}
+              <div className="space-y-2">
+                <h3 className="font-bold text-slate-300 flex items-center gap-1.5">
+                  <GitCommit size={15} className="text-indigo-400" />
+                  Offline Commit History ({pr.commits?.length || pr.commitMessages?.length || 1})
+                </h3>
+
+                {pr.commits && pr.commits.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {pr.commits.map((commit, idx) => {
+                      const isAuthorMatched = !commit.author || commit.author === 'unknown' || commit.author.toLowerCase().includes(pr.githubUsername.toLowerCase());
+                      return (
+                        <div
+                          key={commit.sha || idx}
+                          className="p-3 rounded-lg border border-slate-800 bg-slate-900/60 flex items-start justify-between gap-3"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <code className="text-[11px] font-bold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">
+                                {commit.sha ? commit.sha.substring(0, 7) : `commit-${idx + 1}`}
+                              </code>
+                              <span className="text-slate-200 font-medium">{commit.message}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                              <span className="flex items-center gap-1">
+                                Author: <span className={isAuthorMatched ? 'text-slate-300' : 'text-amber-400 font-bold'}>{commit.author}</span>
+                                {!isAuthorMatched && <AlertTriangle size={11} className="text-amber-400" />}
+                              </span>
+                              {commit.timestamp && <span>{new Date(commit.timestamp).toLocaleString()}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : pr.commitMessages && pr.commitMessages.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {pr.commitMessages.map((msg, idx) => (
+                      <div key={idx} className="p-2.5 rounded-lg border border-slate-800 bg-slate-900/40 text-slate-300 flex items-center gap-2">
+                        <GitCommit size={13} className="text-indigo-400 flex-shrink-0" />
+                        <span>{msg}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-lg border border-slate-800 bg-slate-900/40 text-slate-400">
+                    Single squash commit ingested from PR submission.
+                  </div>
+                )}
+              </div>
+
+              {/* Changed Files */}
+              <div className="space-y-2">
+                <h3 className="font-bold text-slate-300 flex items-center gap-1.5">
+                  <FileCode size={15} className="text-emerald-400" />
+                  Changed Source Files ({pr.changedFilesList?.length || 0})
+                </h3>
+
+                {pr.changedFilesList && pr.changedFilesList.length > 0 ? (
+                  <div className="space-y-1">
+                    {pr.changedFilesList.map((file, idx) => (
+                      <div key={idx} className="p-2 rounded border border-slate-800 bg-slate-900/40 flex items-center justify-between text-[11px]">
+                        <span className="font-mono text-slate-200">{file.filename}</span>
+                        <div className="flex items-center gap-2">
+                          {file.additions !== undefined && <span className="text-emerald-400">+{file.additions}</span>}
+                          {file.deletions !== undefined && <span className="text-rose-400">-{file.deletions}</span>}
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] uppercase">{file.status || 'modified'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-lg border border-slate-800 bg-slate-900/40 text-slate-400">
+                    Source files verified within allowed challenge directory boundaries.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* TAB 2: APPROVE PR */}
           {activeTab === 'approve' && (
             <div className="space-y-4 font-mono text-xs">
@@ -708,6 +1113,51 @@ export default function PullRequestReviewModal({
                 >
                   <Ban size={15} />
                   {loading ? 'Rejecting...' : 'Confirm Rejection'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: REQUEST CHANGES / REVIEW (PHASE 4) */}
+          {activeTab === 'request_review' && (
+            <div className="space-y-4 font-mono text-xs">
+              <div className="p-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 space-y-2">
+                <div className="font-bold text-yellow-400 flex items-center gap-2 text-sm">
+                  <MessageSquare size={16} />
+                  Request Changes / Clarification
+                </div>
+                <p className="text-slate-300 text-xs">
+                  Requesting changes marks the PR as <strong>PENDING_REVIEW</strong> and preserves an auditable review entry in the system with your feedback.
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-400 font-semibold uppercase tracking-wider text-[11px]">
+                  Feedback / Change Request Notes *
+                </label>
+                <textarea
+                  value={requestReviewNotes}
+                  onChange={(e) => setRequestReviewNotes(e.target.value)}
+                  rows={4}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-yellow-500"
+                  placeholder="Detail the required fixes or questions regarding attribution or solution tests..."
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  onClick={() => setActiveTab('inspect')}
+                  className="px-4 py-2 rounded-lg border border-slate-800 text-slate-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRequestReview}
+                  disabled={loading || !requestReviewNotes.trim()}
+                  className="px-5 py-2 rounded-lg bg-yellow-500 hover:bg-yellow-600 text-black font-bold flex items-center gap-2 disabled:opacity-50"
+                >
+                  <MessageSquare size={15} />
+                  {loading ? 'Submitting...' : 'Submit Change Request'}
                 </button>
               </div>
             </div>

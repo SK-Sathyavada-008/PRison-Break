@@ -29,6 +29,8 @@ export interface PRValidationInput {
   repositoryFullName: string;
   isRepoActive: boolean;
   isRepoRegistered: boolean;
+  teamId?: string;
+  assignedIssues?: number[];
   changedFiles?: string[];
   additions?: number;
   deletions?: number;
@@ -47,38 +49,117 @@ export interface PRValidationResult {
   testsPassed: boolean;
   correct: boolean;
   issueNumber: number;
+  issueNumbers: number[];
   validationChecks: ValidationChecks;
   validationReasons: string[];
   allowedToAutoMerge: boolean;
   autoMergeBlockReasons: string[];
+  isDuplicatePR?: boolean;
+}
+
+import type { IssueDifficulty } from '../types';
+
+/**
+ * Deterministically extracts ALL linked issue numbers from PR title and body.
+ * A single student's PR may contain solutions to multiple assigned issues.
+ * Examples:
+ *   "fixes #17, closes #18, resolves #19" -> [17, 18, 19]
+ *   "closes #10 and #12" -> [10, 12]
+ *   "Resolves #5, task #6" -> [5, 6]
+ */
+export function extractAllLinkedIssues(title: string, body?: string): number[] {
+  const text = `${title} ${body || ''}`;
+  const found = new Set<number>();
+
+  // 1. Keyword-based matching with multiple comma/and separated hashtags
+  // Matches: fixes #1, #2, #3 or closes 4, 5
+  const keywordBlockRegex = /(?:fixes|closed|closes|fixed|resolves|resolved|challenge|issue|task)\s*([#\d\s,;&and]+)/gi;
+  let blockMatch: RegExpExecArray | null;
+  while ((blockMatch = keywordBlockRegex.exec(text)) !== null) {
+    const numbersInBlock = blockMatch[1].match(/\d+/g);
+    if (numbersInBlock) {
+      numbersInBlock.forEach((numStr) => {
+        const n = parseInt(numStr, 10);
+        if (n > 0) found.add(n);
+      });
+    }
+  }
+
+  // 2. URL-based matching: /issues/(\d+)
+  const urlRegex = /\/issues\/(\d+)/gi;
+  let urlMatch: RegExpExecArray | null;
+  while ((urlMatch = urlRegex.exec(text)) !== null) {
+    const n = parseInt(urlMatch[1], 10);
+    if (n > 0) found.add(n);
+  }
+
+  // 3. Fallback: Standalone hashtag matches: #12, #14
+  const hashRegex = /#(\d+)/g;
+  let hashMatch: RegExpExecArray | null;
+  while ((hashMatch = hashRegex.exec(text)) !== null) {
+    const n = parseInt(hashMatch[1], 10);
+    if (n > 0) found.add(n);
+  }
+
+  return Array.from(found).sort((a, b) => a - b);
 }
 
 /**
- * Deterministically extracts linked issue numbers from PR title and body.
- * Supports GitHub keywords: fixes #17, closes #17, resolves #17, challenge #17, issue #17, #17
+ * Backward compatibility: Extracts the first linked issue number.
  */
 export function extractLinkedIssue(title: string, body?: string): number {
-  const text = `${title} ${body || ''}`;
-  
-  // Keyword-prefixed pattern (highest confidence)
-  const keywordMatch = text.match(/(?:fixes|closed|closes|fixed|resolves|resolved|challenge|issue|task)\s*#?(\d+)/i);
-  if (keywordMatch && keywordMatch[1]) {
-    return parseInt(keywordMatch[1], 10);
+  const all = extractAllLinkedIssues(title, body);
+  return all.length > 0 ? all[0] : 0;
+}
+
+/**
+ * Determines the difficulty of an issue strictly from trusted issue metadata / validated GitHub labels.
+ * Supported trusted labels:
+ *   - difficulty:easy (10 XP)
+ *   - difficulty:medium (20 XP)
+ *   - difficulty:hard (30 XP)
+ *   - difficulty:very-hard (40 XP)
+ * 
+ * NOTE: Does not infer difficulty from untrusted PR descriptions or titles.
+ */
+export function determineIssueDifficulty(
+  _issueNumber: number,
+  labels: string[] = [],
+  _textContext: string = ''
+): IssueDifficulty {
+  const normalizedLabels = labels.map((l) => l.toLowerCase().trim());
+
+  if (
+    normalizedLabels.includes('difficulty:very-hard') ||
+    normalizedLabels.includes('difficulty:very_hard') ||
+    normalizedLabels.includes('points:40') ||
+    normalizedLabels.includes('points:50')
+  ) {
+    return 'VERY_HARD';
   }
 
-  // URL-based pattern
-  const urlMatch = text.match(/\/issues\/(\d+)/i);
-  if (urlMatch && urlMatch[1]) {
-    return parseInt(urlMatch[1], 10);
+  if (
+    normalizedLabels.includes('difficulty:hard') ||
+    normalizedLabels.includes('points:30')
+  ) {
+    return 'HARD';
   }
 
-  // Standalone hashtag pattern (#17)
-  const hashMatch = text.match(/#(\d+)/);
-  if (hashMatch && hashMatch[1]) {
-    return parseInt(hashMatch[1], 10);
+  if (
+    normalizedLabels.includes('difficulty:medium') ||
+    normalizedLabels.includes('points:20')
+  ) {
+    return 'MEDIUM';
   }
 
-  return 0;
+  if (
+    normalizedLabels.includes('difficulty:easy') ||
+    normalizedLabels.includes('points:10')
+  ) {
+    return 'EASY';
+  }
+
+  return 'EASY';
 }
 
 /**
@@ -230,11 +311,16 @@ export async function executePRValidationPipeline(
     autoMergeBlockReasons.push('Repository is unregistered.');
   }
 
-  // ── Step 3: Identify Linked Issue ─────────────────────────
-  const issueNumber = extractLinkedIssue(input.prTitle, input.prBody);
-  const issueValid = issueNumber > 0;
+  // ── Step 3: Identify Linked Issues (Student PR may solve multiple) ──
+  const issueNumbers = extractAllLinkedIssues(input.prTitle, input.prBody);
+  const issueNumber = issueNumbers.length > 0 ? issueNumbers[0] : 0;
+  const issueValid = issueNumbers.length > 0;
   if (issueValid) {
-    validationReasons.push(`Valid challenge issue #${issueNumber} linked.`);
+    if (issueNumbers.length === 1) {
+      validationReasons.push(`Valid challenge issue #${issueNumber} linked.`);
+    } else {
+      validationReasons.push(`Multiple challenge issues solved in single PR: [${issueNumbers.map((n) => `#${n}`).join(', ')}].`);
+    }
   } else {
     validationReasons.push('No challenge issue linked (title/body missing "#<issue>" or "fixes #<issue>").');
     autoMergeBlockReasons.push('No valid challenge issue linked.');
@@ -326,6 +412,7 @@ export async function executePRValidationPipeline(
     testsPassed: validationChecks.testsPassed,
     correct: status === 'AUTO_APPROVED' || status === 'MERGED',
     issueNumber,
+    issueNumbers,
     validationChecks,
     validationReasons,
     allowedToAutoMerge,
@@ -351,9 +438,11 @@ export async function persistPRValidationAndScore(
     id: prId,
     repositoryId: input.repositoryId,
     repositoryFullName: input.repositoryFullName,
+    teamId: input.teamId,
     prNumber: input.prNumber,
     githubUsername: input.authorUsername,
     issueNumber: validationResult.issueNumber,
+    issueNumbers: validationResult.issueNumbers,
     title: input.prTitle,
     status: validationResult.status,
     processingState: validationResult.status,

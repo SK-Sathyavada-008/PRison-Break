@@ -39,7 +39,7 @@ export default function ScoreEventsPage() {
   const bonusEvents = events.filter(e => e.event && e.event.includes('Bonus')).length;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div>
         <h1 className="font-display text-xl font-bold text-slate-100 tracking-wide mb-1">Score Events</h1>

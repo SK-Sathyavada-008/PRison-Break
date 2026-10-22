@@ -1,46 +1,76 @@
 // ─────────────────────────────────────────────
-// LeaderboardTable — Live Public & Projector Roster
-// Large Typography · Deterministic Ranks · Smooth Telemetry Glow
+// LeaderboardTable — Team-Based Squad Rankings Roster
+// Large Typography · Deterministic Ranks · 4-Student Squads · Difficulty Breakdown
+// Each row displays: Rank, Repository Name, Team Name, Total XP, Solved Issues,
+// Very Hard Solved, Valid Submissions Count, and Submission/Grading Status.
 // ─────────────────────────────────────────────
 
 import { memo } from 'react';
-import { ArrowUp, ArrowDown, Minus, Zap, GitMerge, GitPullRequest, Shield, ExternalLink } from 'lucide-react';
-import type { Participant } from '../../types';
+import {
+  ArrowUp,
+  ArrowDown,
+  Minus,
+  Zap,
+  CheckCircle2,
+  FolderGit2,
+  ExternalLink,
+  Flame,
+  Clock,
+  AlertCircle,
+  Users,
+} from 'lucide-react';
+import type { Team, Participant } from '../../types';
 import StatusBadge from '../ui/StatusBadge';
 
 interface LeaderboardTableProps {
-  participants: Participant[];
+  teams?: Team[];
+  participants?: Participant[]; // Backward compatibility
   projectorMode?: boolean;
   showStatus?: boolean;
+  onSelectTeam?: (team: Team) => void;
 }
 
-function RankBadge({ rank }: { rank: number }) {
+function RankBadge({ rank, rankText, isTied }: { rank: number; rankText?: string; isTied?: boolean }) {
+  const displayText = rankText || (isTied ? `T-${rank}` : `#${rank}`);
+
   if (rank === 1) {
     return (
-      <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[#FF1E46]/20 border border-[#FF1E46]/70 text-[#FF5470] font-black font-mono text-base shadow-[0_0_15px_rgba(255,30,70,0.35)]">
-        #1
-      </span>
+      <div className="flex flex-col items-center">
+        <span className="inline-flex items-center justify-center min-w-[38px] h-9 px-2 rounded-xl bg-[#FF1E46]/20 border border-[#FF1E46]/70 text-[#FF5470] font-black font-mono text-sm shadow-[0_0_15px_rgba(255,30,70,0.35)]">
+          {displayText}
+        </span>
+        {isTied && <span className="text-[9px] font-mono font-bold text-amber-400 mt-0.5">TIED</span>}
+      </div>
     );
   }
   if (rank === 2) {
     return (
-      <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-slate-700/40 border border-slate-400/60 text-slate-100 font-bold font-mono text-base shadow-sm">
-        #2
-      </span>
+      <div className="flex flex-col items-center">
+        <span className="inline-flex items-center justify-center min-w-[38px] h-9 px-2 rounded-xl bg-slate-700/40 border border-slate-400/60 text-slate-100 font-bold font-mono text-sm shadow-sm">
+          {displayText}
+        </span>
+        {isTied && <span className="text-[9px] font-mono font-bold text-amber-400 mt-0.5">TIED</span>}
+      </div>
     );
   }
   if (rank === 3) {
     return (
-      <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-amber-950/40 border border-amber-500/60 text-amber-400 font-bold font-mono text-base shadow-sm">
-        #3
-      </span>
+      <div className="flex flex-col items-center">
+        <span className="inline-flex items-center justify-center min-w-[38px] h-9 px-2 rounded-xl bg-amber-950/40 border border-amber-500/60 text-amber-400 font-bold font-mono text-sm shadow-sm">
+          {displayText}
+        </span>
+        {isTied && <span className="text-[9px] font-mono font-bold text-amber-400 mt-0.5">TIED</span>}
+      </div>
     );
   }
 
   return (
-    <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[#090B14] border border-slate-800 text-slate-400 font-semibold font-mono text-sm">
-      #{rank}
-    </span>
+    <div className="flex flex-col items-center">
+      <span className="inline-flex items-center justify-center min-w-[38px] h-9 px-2 rounded-xl bg-[#090B14] border border-slate-800 text-slate-400 font-semibold font-mono text-xs">
+        {displayText}
+      </span>
+      {isTied && <span className="text-[9px] font-mono font-bold text-amber-400 mt-0.5">TIED</span>}
+    </div>
   );
 }
 
@@ -63,23 +93,37 @@ function RankDelta({ current, previous }: { current: number; previous: number })
   );
 }
 
-// Memoized Row for efficient rendering of 150+ participants
-const LeaderboardRow = memo(function LeaderboardRow({
-  participant: p,
+// Memoized Row for efficient rendering of teams
+const TeamLeaderboardRow = memo(function TeamLeaderboardRow({
+  team: t,
   projectorMode,
   showStatus,
+  onSelectTeam,
 }: {
-  participant: Participant;
+  team: Team;
   projectorMode?: boolean;
   showStatus?: boolean;
+  onSelectTeam?: (team: Team) => void;
 }) {
-  const rankImproved = p.previousRank > p.rank;
-  const rankDropped = p.previousRank < p.rank;
+  const rankImproved = t.previousRank > t.rank;
+  const rankDropped = t.previousRank < t.rank;
+  const members = t.members || [];
+  const solved = t.solvedIssues || [];
+
+  // Difficulty counts
+  const easyCount = solved.filter((s) => s.difficulty === 'EASY').length;
+  const medCount = solved.filter((s) => s.difficulty === 'MEDIUM').length;
+  const hardCount = solved.filter((s) => s.difficulty === 'HARD').length;
+  const vHardCount = t.veryHardSolvedCount ?? solved.filter((s) => s.difficulty === 'VERY_HARD').length;
+
+  const validStudentsCount =
+    t.validSubmissionsCount ?? members.filter((m) => m.prSubmitted).length;
 
   return (
     <tr
-      key={p.id}
-      className={`transition-colors duration-300 group ${
+      key={t.id}
+      onClick={() => onSelectTeam && onSelectTeam(t)}
+      className={`transition-colors duration-300 group cursor-pointer ${
         rankImproved
           ? 'bg-emerald-500/10 hover:bg-emerald-500/15'
           : rankDropped
@@ -90,110 +134,163 @@ const LeaderboardRow = memo(function LeaderboardRow({
       {/* 1. Rank */}
       <td className="text-center font-mono py-4 px-3">
         <div className="flex items-center justify-center gap-2">
-          <RankBadge rank={p.rank} />
+          <RankBadge rank={t.rank} rankText={t.rankText} isTied={t.isTied} />
           <div className="w-8 flex justify-center">
-            <RankDelta current={p.rank} previous={p.previousRank} />
+            <RankDelta current={t.rank} previous={t.previousRank} />
           </div>
         </div>
       </td>
 
-      {/* 2. Name */}
+      {/* 2. Repository Name (squard_X) */}
+      <td className="py-4 px-4 whitespace-nowrap">
+        <div className="flex items-center gap-2">
+          <a
+            href={
+              t.repositoryFullName
+                ? `https://github.com/${t.repositoryFullName}`
+                : `https://github.com/PRison-Break-2026/${t.repositoryName}`
+            }
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-[#FF0A3B]/40 transition-colors text-xs font-mono font-bold max-w-[200px]"
+            title={t.repositoryName}
+          >
+            <FolderGit2 size={13} className="text-slate-400 shrink-0" />
+            <span className="font-bold text-emerald-400 truncate">{t.repositoryName}</span>
+            <ExternalLink size={11} className="opacity-60 shrink-0" />
+          </a>
+        </div>
+      </td>
+
+      {/* 3. Team Name */}
       <td className="py-4 px-4">
-        <div className="flex items-center gap-3.5">
-          {p.avatarUrl ? (
-            <img
-              src={p.avatarUrl}
-              alt={p.name}
-              className={`rounded-full object-cover border border-slate-700/80 bg-slate-900 shrink-0 ${
-                projectorMode ? 'w-11 h-11' : 'w-10 h-10'
-              }`}
-              loading="lazy"
-            />
-          ) : (
-            <div
-              className={`rounded-full bg-slate-900 border border-slate-700/80 flex items-center justify-center font-bold text-slate-300 font-mono shrink-0 ${
-                projectorMode ? 'w-11 h-11 text-base' : 'w-10 h-10 text-sm'
-              }`}
-            >
-              {p.name[0]}
-            </div>
-          )}
-          <div className="min-w-0">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center font-bold text-slate-300 font-mono shrink-0 overflow-hidden text-xs">
+            {(() => {
+              const digits = t.name.replace(/[^0-9]/g, '');
+              if (digits && digits.length <= 2) return `#${digits}`;
+              if (t.rank && t.rank <= 99) return `#${t.rank}`;
+              return <Users size={15} className="text-slate-400" />;
+            })()}
+          </div>
+          <div className="min-w-0 max-w-[220px]">
             <div
               className={`font-bold text-white group-hover:text-emerald-300 transition-colors truncate ${
-                projectorMode ? 'text-lg sm:text-xl' : 'text-base sm:text-lg'
+                projectorMode ? 'text-lg' : 'text-sm sm:text-base'
               }`}
+              title={t.name}
             >
-              {p.name}
+              {t.name}
+            </div>
+            <div className="text-[11px] text-slate-500 font-sans truncate">
+              Click to view score breakdown
             </div>
           </div>
         </div>
       </td>
 
-      {/* 3. GitHub Username */}
-      <td className="py-4 px-4 font-mono">
-        <a
-          href={`https://github.com/${p.githubUsername}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`inline-flex items-center gap-1.5 text-slate-400 hover:text-emerald-400 transition-colors font-mono ${
-            projectorMode ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
-          }`}
-        >
-          <span>@{p.githubUsername}</span>
-          <ExternalLink size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-        </a>
-      </td>
-
-      {/* 4. XP Score */}
-      <td className="py-4 px-4 font-mono">
+      {/* 4. Total Validated Team XP */}
+      <td className="py-4 px-4 font-mono text-left">
         <div className="flex items-center gap-1.5">
-          <Zap size={15} className="text-emerald-400 fill-emerald-400/20" />
+          <Zap size={16} className="text-emerald-400 fill-emerald-400/20" />
           <span
             className={`font-black text-emerald-400 tracking-tight ${
               projectorMode ? 'text-xl sm:text-2xl' : 'text-lg sm:text-xl'
             }`}
           >
-            {(p.totalScore ?? p.xp).toLocaleString()}
+            {t.totalScore.toLocaleString()}
           </span>
           <span className="text-xs text-slate-500 font-normal ml-0.5">XP</span>
         </div>
       </td>
 
-      {/* 5. PRs */}
+      {/* 5. Solved Issues Count & Difficulty Breakdown */}
       <td className="py-4 px-4 font-mono">
-        <div className="inline-flex items-center gap-1.5 text-blue-300">
-          <GitPullRequest size={14} className="text-blue-400" />
-          <span className={`font-bold ${projectorMode ? 'text-base' : 'text-sm'}`}>
-            {p.prCount ?? p.prs}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {easyCount > 0 && (
+            <span
+              className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/40 border border-emerald-500/40 text-emerald-400"
+              title="Easy (10 pts)"
+            >
+              {easyCount}E
+            </span>
+          )}
+          {medCount > 0 && (
+            <span
+              className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950/40 border border-cyan-500/40 text-cyan-400"
+              title="Medium (20 pts)"
+            >
+              {medCount}M
+            </span>
+          )}
+          {hardCount > 0 && (
+            <span
+              className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-950/40 border border-purple-500/40 text-purple-400"
+              title="Hard (30 pts)"
+            >
+              {hardCount}H
+            </span>
+          )}
+          <span className="text-xs text-slate-200 font-bold ml-1">
+            {t.validatedIssueCount ?? solved.length} Solved
           </span>
         </div>
       </td>
 
-      {/* 6. Merged */}
+      {/* 6. Very Hard Issues Accurately Solved */}
       <td className="py-4 px-4 font-mono">
-        <div className="inline-flex items-center gap-1.5 text-purple-300">
-          <GitMerge size={14} className="text-purple-400" />
-          <span className={`font-bold ${projectorMode ? 'text-base' : 'text-sm'}`}>
-            {p.mergedPrCount ?? p.mergedPRs}
+        {vHardCount > 0 ? (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/50 border border-rose-500/60 text-rose-400 font-bold text-xs shadow-sm shadow-rose-950/40">
+            <Flame size={13} className="text-rose-400 animate-pulse" />
+            <span>{vHardCount} Very Hard</span>
+          </span>
+        ) : (
+          <span className="text-xs text-slate-600 font-mono">0 VH</span>
+        )}
+      </td>
+
+      {/* 7. Registered Students with Valid Submissions */}
+      <td className="py-4 px-4 font-mono">
+        <div className="inline-flex items-center gap-1.5">
+          <span
+            className={`font-bold text-xs ${
+              validStudentsCount === 4
+                ? 'text-emerald-400'
+                : validStudentsCount > 0
+                ? 'text-slate-300'
+                : 'text-slate-500'
+            }`}
+          >
+            {validStudentsCount} / 4 Students
           </span>
         </div>
       </td>
 
-      {/* 7. Cells */}
+      {/* 8. Submission / Grading Status */}
       <td className="py-4 px-4 font-mono">
-        <div className="inline-flex items-center gap-1.5 text-cyan-300">
-          <Shield size={14} className="text-cyan-400" />
-          <span className={`font-bold ${projectorMode ? 'text-base' : 'text-sm'}`}>
-            {p.escapedCells}
+        {validStudentsCount === 4 ? (
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-400 text-xs font-semibold">
+            <CheckCircle2 size={12} />
+            <span>ALL VALID</span>
           </span>
-        </div>
+        ) : validStudentsCount > 0 ? (
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-950/40 border border-amber-500/30 text-amber-400 text-xs font-semibold">
+            <Clock size={12} />
+            <span>PARTIAL ({validStudentsCount}/4)</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-500 text-xs">
+            <AlertCircle size={12} />
+            <span>PENDING PRS</span>
+          </span>
+        )}
       </td>
 
-      {/* Status (Optional for Admin Leaderboard) */}
+      {/* Optional Status for Admin */}
       {showStatus && (
         <td className="py-4 px-4">
-          <StatusBadge status={p.status} size="sm" />
+          <StatusBadge status={t.active ? 'active' : 'inactive'} size="sm" />
         </td>
       )}
     </tr>
@@ -201,35 +298,73 @@ const LeaderboardRow = memo(function LeaderboardRow({
 });
 
 export default function LeaderboardTable({
+  teams,
   participants,
   projectorMode = false,
   showStatus = false,
+  onSelectTeam,
 }: LeaderboardTableProps) {
+  let displayTeams: Team[] = [];
+
+  if (teams && teams.length > 0) {
+    displayTeams = teams;
+  } else if (participants && participants.length > 0) {
+    displayTeams = participants.map((p, idx) => ({
+      id: p.id,
+      name: `Squad ${idx + 1}`,
+      repositoryId: `squard_${idx + 1}`,
+      repositoryName: `squard_${idx + 1}`,
+      members: [
+        {
+          studentId: p.id,
+          name: p.name,
+          githubUsername: p.githubUsername,
+          assignedIssues: [1, 2],
+          prSubmitted: true,
+        },
+      ],
+      totalScore: p.totalScore ?? p.xp,
+      assignedIssueCount: 4,
+      solvedIssues: [],
+      validatedIssueCount: p.mergedPRs || 0,
+      veryHardSolvedCount: 0,
+      prsSubmitted: p.prs || 0,
+      active: true,
+      rank: p.rank,
+      previousRank: p.previousRank,
+      createdAt: p.createdAt || new Date().toISOString(),
+      updatedAt: p.updatedAt || new Date().toISOString(),
+    }));
+  }
+
   return (
     <div className="overflow-x-auto rounded-2xl border border-slate-800/80 bg-slate-950/60 shadow-2xl backdrop-blur-sm">
       <table className="prison-table w-full">
         <thead>
           <tr className="border-b border-slate-800/90 bg-slate-900/60">
-            <th className="w-28 text-center font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-3">
+            <th className="w-24 text-center font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-3">
               Rank
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              Name
+              Assigned Repository
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              GitHub Username
+              Squad Team
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              XP
+              Team Score
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              PRs
+              Solved Issues
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              Merged
+              Very Hard Solved
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              Cells
+              Valid PRs
+            </th>
+            <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
+              Submission Status
             </th>
             {showStatus && (
               <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
@@ -239,12 +374,13 @@ export default function LeaderboardTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-800/50">
-          {participants.map((p) => (
-            <LeaderboardRow
-              key={p.id}
-              participant={p}
+          {displayTeams.map((t) => (
+            <TeamLeaderboardRow
+              key={t.id}
+              team={t}
               projectorMode={projectorMode}
               showStatus={showStatus}
+              onSelectTeam={onSelectTeam}
             />
           ))}
         </tbody>

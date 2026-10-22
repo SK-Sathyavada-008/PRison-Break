@@ -221,7 +221,7 @@ export default function WebhookEventsPage() {
   const failedCount = events.filter((e) => e.processingStatus === 'FAILED').length;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div>

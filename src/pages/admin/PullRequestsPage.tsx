@@ -100,23 +100,23 @@ export default function PullRequestsPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-8">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-white/[0.06]">
         <div>
-          <h1 className="font-display text-xl font-bold text-slate-100 tracking-wide mb-1 flex items-center gap-2">
+          <h1 className="text-2xl font-extrabold text-white tracking-tight mb-1 flex items-center gap-2">
             <span>Pull Requests & Review Queue</span>
           </h1>
-          <p className="font-mono text-xs text-slate-500">
+          <p className="text-sm text-slate-400">
             Deterministic scoring engine, validation signals, and auditable warden reviews
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 self-start sm:self-auto flex-wrap">
+        <div className="flex items-center gap-3 self-start sm:self-auto flex-wrap">
           {/* Live Background Auto-Sync Indicator */}
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono shadow-sm">
+          <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs shadow-sm">
             <span className={`w-2 h-2 rounded-full ${syncState.isSyncing ? 'bg-cyan-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`} />
-            <span className="text-slate-300 font-semibold">
+            <span className="text-slate-300 font-medium">
               {syncState.isSyncing ? 'Auto-Syncing GH...' : `Live Auto-Sync (${syncState.intervalSeconds}s)`}
             </span>
           </div>
@@ -124,16 +124,16 @@ export default function PullRequestsPage() {
           {reviewQueueCount > 0 && (
             <button
               onClick={() => setFilter('review_queue')}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 font-mono text-xs hover:bg-amber-500/20 transition-all"
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-semibold hover:bg-amber-500/25 transition-all shadow-sm"
             >
-              <ShieldAlert size={14} className="animate-pulse" />
+              <ShieldAlert size={14} className="animate-pulse text-amber-400" />
               <span>{reviewQueueCount} Awaiting Review</span>
             </button>
           )}
 
           <button
             onClick={() => setIsSyncModalOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold transition-all shadow-md shadow-emerald-950/40"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-slate-950 text-xs font-bold transition-all shadow-md shadow-emerald-950/40"
             title="Fetch all PRs directly from GitHub repositories"
           >
             <RefreshCw size={13} className={syncState.isSyncing ? 'animate-spin' : ''} />
@@ -143,35 +143,33 @@ export default function PullRequestsPage() {
       </div>
 
       {error && (
-        <div className="p-3 rounded-lg border border-red-500/30 bg-red-500/10 flex items-center gap-2 text-red-400 font-mono text-xs">
-          <AlertCircle size={14} className="flex-shrink-0" />
-          <span>{error}</span>
+        <div className="p-4 rounded-xl border border-red-500/30 bg-red-500/10 flex items-center gap-2.5 text-red-300 text-xs">
+          <AlertCircle size={16} className="shrink-0 text-red-400" />
+          <span className="font-medium">{error}</span>
         </div>
       )}
 
-      {/* Stats row */}
-      <div className="flex flex-wrap gap-3">
+      {/* Stats row - Balanced Grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         {[
-          { label: 'Total PRs',       value: prs.length,          color: 'text-slate-400' },
-          { label: 'Review Queue',    value: reviewQueueCount,    color: reviewQueueCount > 0 ? 'text-amber-400' : 'text-slate-500', alert: reviewQueueCount > 0 },
-          { label: 'Auto-Approved',   value: autoApprovedCount,   color: 'text-emerald-400' },
-          { label: 'Merged',          value: mergedCount,         color: 'text-purple-400' },
-          { label: 'Rejected',        value: rejectedCount,       color: 'text-rose-400' },
+          { label: 'Total PRs',       value: prs.length,          color: 'text-slate-100', bg: 'border-slate-800 bg-slate-900/40' },
+          { label: 'Review Queue',    value: reviewQueueCount,    color: reviewQueueCount > 0 ? 'text-amber-400' : 'text-slate-400', alert: reviewQueueCount > 0, bg: reviewQueueCount > 0 ? 'border-amber-500/30 bg-amber-500/10' : 'border-slate-800 bg-slate-900/40' },
+          { label: 'Auto-Approved',   value: autoApprovedCount,   color: 'text-emerald-400', bg: 'border-emerald-500/20 bg-emerald-950/20' },
+          { label: 'Merged',          value: mergedCount,         color: 'text-purple-400', bg: 'border-purple-500/20 bg-purple-950/20' },
+          { label: 'Rejected',        value: rejectedCount,       color: 'text-rose-400', bg: 'border-rose-500/20 bg-rose-950/20' },
         ].map((s) => (
           <div
             key={s.label}
-            className={`px-4 py-2.5 rounded-lg border bg-slate-900/40 flex items-center gap-3 ${
-              s.alert ? 'border-amber-500/40 bg-amber-500/5' : 'border-slate-800/60'
-            }`}
+            className={`p-4 rounded-2xl border transition-all flex flex-col justify-between ${s.bg}`}
           >
-            <span className={`font-display text-lg font-bold ${s.color}`}>{s.value}</span>
-            <span className="font-mono text-[10px] text-slate-500 uppercase tracking-widest">{s.label}</span>
+            <span className="text-xs text-slate-400 font-medium uppercase tracking-wider">{s.label}</span>
+            <span className={`text-2xl font-black font-mono tracking-tight mt-2 ${s.color}`}>{s.value}</span>
           </div>
         ))}
       </div>
 
       {/* Filter tabs */}
-      <div className="flex gap-1.5 flex-wrap">
+      <div className="flex gap-2 flex-wrap pb-1">
         {FILTER_TABS.map((opt) => {
           const Icon = opt.icon;
           const count =
