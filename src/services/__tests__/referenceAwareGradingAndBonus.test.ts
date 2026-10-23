@@ -467,6 +467,17 @@ describe('PRison Control — Complete Competition Engine Verification', () => {
       expect(res1.transaction.id).toBe(res2.transaction.id);
       expect(res2.success).toBe(true);
     });
+
+    it('sanitizes undefined fields to protect Firestore transactions from throwing', async () => {
+      const res = await bonusService.awardBonus({
+        teamId: 'team_squade_10',
+        amount: 5,
+        reason: 'Bonus with undefined optional adminId',
+        adminUsername: 'unknown',
+      });
+      expect(res.success).toBe(true);
+      expect(res.transaction.adminId).toBeDefined();
+    });
   });
 
   // ─────────────────────────────────────────────

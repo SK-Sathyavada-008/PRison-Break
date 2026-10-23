@@ -111,6 +111,7 @@ export default function BonusXPModal({
         amount: num,
         reason: reason.trim(),
         adminUsername: adminName,
+        adminId: currentUser?.uid || adminName,
       });
 
       setSuccessMsg(`Successfully awarded +${num} Bonus XP to ${team.name}!`);

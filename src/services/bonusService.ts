@@ -31,6 +31,24 @@ function notifyBonusListeners() {
   bonusListeners.forEach((fn) => fn([...inMemoryBonusTransactions]));
 }
 
+/**
+ * Recursively cleans an object by removing any properties with `undefined` values.
+ * Firestore strictly forbids `undefined` field values in set(), update(), or transaction.set().
+ */
+export function cleanFirestoreData<T extends Record<string, any>>(obj: T): T {
+  const result: any = Array.isArray(obj) ? [] : {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
+        result[key] = cleanFirestoreData(value);
+      } else {
+        result[key] = value;
+      }
+    }
+  }
+  return result;
+}
+
 export interface BonusAwardRequest {
   teamId: string;
   amount: number;
@@ -175,14 +193,14 @@ export const bonusService = {
         const bonusTx: BonusTransaction = {
           id: txId,
           teamId: req.teamId,
-          teamName: teamData.name,
-          repositoryName: teamData.repositoryName,
+          teamName: teamData.name || req.teamId,
+          repositoryName: teamData.repositoryName || teamData.repositoryId || '',
           amount: roundedAmount,
           reason: req.reason.trim(),
-          adminId: req.adminId,
+          adminId: req.adminId || req.adminUsername.trim() || 'admin_warden',
           adminUsername: req.adminUsername.trim(),
           timestamp: now,
-          idempotencyKey,
+          idempotencyKey: idempotencyKey || txId,
           previousBonusXP,
           newBonusXP,
           previousTotalXP,
@@ -196,7 +214,7 @@ export const bonusService = {
           performedBy: req.adminUsername.trim(),
           adminUsername: req.adminUsername.trim(),
           targetId: req.teamId,
-          targetName: teamData.name,
+          targetName: teamData.name || req.teamId,
           previousValue: { bonusXP: previousBonusXP, totalXP: previousTotalXP },
           newValue: { bonusXP: newBonusXP, totalXP: newTotalXP },
           details: {
@@ -209,9 +227,9 @@ export const bonusService = {
           timestamp: now,
         };
 
-        // Write append-only transaction and audit record
-        transaction.set(bonusDocRef, bonusTx);
-        transaction.set(auditDocRef, auditLog);
+        // Write append-only transaction and audit record with clean data
+        transaction.set(bonusDocRef, cleanFirestoreData(bonusTx));
+        transaction.set(auditDocRef, cleanFirestoreData(auditLog));
 
         // Update team fields (earnedXP is NEVER changed by bonus)
         transaction.update(teamDocRef, {
@@ -256,14 +274,14 @@ export const bonusService = {
     const bonusTx: BonusTransaction = {
       id: txId,
       teamId: req.teamId,
-      teamName: team.name,
-      repositoryName: team.repositoryName,
+      teamName: team.name || req.teamId,
+      repositoryName: team.repositoryName || team.repositoryId || '',
       amount: roundedAmount,
       reason: req.reason.trim(),
-      adminId: req.adminId,
+      adminId: req.adminId || req.adminUsername.trim() || 'admin_warden',
       adminUsername: req.adminUsername.trim(),
       timestamp: now,
-      idempotencyKey,
+      idempotencyKey: idempotencyKey || txId,
       previousBonusXP,
       newBonusXP,
       previousTotalXP,
