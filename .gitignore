@@ -28,3 +28,6 @@ dist-ssr
 # Environment secrets
 .env
 .env*.local
+
+# Challenge Repos & Confidential Solutions
+repoissies/

@@ -41,11 +41,13 @@ export interface SandboxExecutionInput {
   baseBranchTests?: string[];
   mockExecutionResult?: {
     compiles?: boolean;
+    compilationPassed?: boolean;
     testsPassed?: number;
     testsFailed?: number;
     totalTests?: number;
     edgeCasesPassed?: boolean;
     normalInputsPassed?: boolean;
+    outputMatchesExpected?: boolean;
     timeout?: boolean;
     crash?: boolean;
   };
@@ -252,7 +254,7 @@ export const sandboxRunner = {
       };
     }
 
-    const compiles = mock?.compiles !== false;
+    const compiles = mock?.compiles !== false && (mock as any)?.compilationPassed !== false;
     if (!compiles) {
       return {
         success: false,
@@ -272,7 +274,7 @@ export const sandboxRunner = {
     }
 
     const totalTests = mock?.totalTests ?? 5;
-    const testsFailed = mock?.testsFailed ?? 0;
+    const testsFailed = mock?.testsFailed ?? (mock?.normalInputsPassed === false ? Math.max(1, totalTests - (mock?.testsPassed ?? 1)) : 0);
     const testsPassed = mock?.testsPassed ?? (totalTests - testsFailed);
     const normalInputsPassed = mock?.normalInputsPassed !== false && testsPassed >= 3;
     const edgeCasesPassed = mock?.edgeCasesPassed !== false && testsFailed === 0;

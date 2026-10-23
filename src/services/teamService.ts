@@ -6,6 +6,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   setDoc,
   updateDoc,
@@ -297,9 +298,45 @@ export function getTeamCorrectnessTotal(team: Team | FirestoreTeam): number {
  * 4. Total correctness score across validated issues, descending.
  * 5. If still tied, return 0 (display an explicit tie rather than inventing a winner).
  */
+function roundToTwoDecimals(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+export function getTeamTotalXP(team: Team | FirestoreTeam): number {
+  if (team.totalXP !== undefined) return team.totalXP;
+  if (team.earnedXP !== undefined || team.bonusXP !== undefined) {
+    const earned = team.earnedXP ?? (team.totalScore ?? 0);
+    const bonus = team.bonusXP ?? 0;
+    return roundToTwoDecimals(earned + bonus);
+  }
+  return team.totalScore ?? 0;
+}
+
+export function getTeamEarnedXP(team: Team | FirestoreTeam): number {
+  if (team.earnedXP !== undefined) return team.earnedXP;
+  if (team.totalScore !== undefined && team.bonusXP !== undefined) {
+    return Math.max(0, roundToTwoDecimals(team.totalScore - team.bonusXP));
+  }
+  return team.totalScore ?? 0;
+}
+
+export function getTeamBonusXP(team: Team | FirestoreTeam): number {
+  return team.bonusXP ?? 0;
+}
+
+/**
+ * Phase 5 Deterministic Team Ranking Comparator:
+ * 1. Total validated team XP (earnedXP + bonusXP), descending.
+ * 2. Number of accurately solved Very Hard issues, descending.
+ * 3. Total Very Hard issue score, descending.
+ * 4. Total correctness score across validated issues, descending.
+ * 5. If still tied, return 0 (display an explicit tie rather than inventing a winner).
+ */
 export function compareTeamsPhase5(a: Team, b: Team): number {
-  // 1. Total validated team XP, descending
-  const scoreDiff = (b.totalScore ?? 0) - (a.totalScore ?? 0);
+  // 1. Total validated team XP (totalXP = earnedXP + bonusXP), descending
+  const aTotal = getTeamTotalXP(a);
+  const bTotal = getTeamTotalXP(b);
+  const scoreDiff = bTotal - aTotal;
   if (scoreDiff !== 0) return scoreDiff;
 
   // 2. Number of accurately solved Very Hard issues, descending
@@ -321,21 +358,34 @@ export function compareTeamsPhase5(a: Team, b: Team): number {
 /**
  * Deterministic sorting and rank assignment for team leaderboard.
  * Preserves explicit ties (e.g. rankText 'T-1', isTied: true) when teams are tied across all 4 criteria.
+ * Supports configurable team sizes (4 or 5 students).
  */
 export function sortTeams(teams: Team[]): Team[] {
   const sorted = [...teams].sort(compareTeamsPhase5);
   const ranked: Team[] = [];
 
   for (let i = 0; i < sorted.length; i++) {
+    const raw = sorted[i];
+    const earnedXP = getTeamEarnedXP(raw);
+    const bonusXP = getTeamBonusXP(raw);
+    const totalXP = getTeamTotalXP(raw);
+    const targetSize = raw.configuredTeamSize || 4;
+    const validCount = (raw.members || []).filter((m) => m.prSubmitted).length;
+
     const current: Team = {
-      ...sorted[i],
-      veryHardScore: getTeamVeryHardScore(sorted[i]),
-      correctnessScoreTotal: getTeamCorrectnessTotal(sorted[i]),
-      validSubmissionsCount: (sorted[i].members || []).filter((m) => m.prSubmitted).length,
+      ...raw,
+      earnedXP,
+      bonusXP,
+      totalXP,
+      totalScore: totalXP, // Backward compatibility
+      configuredTeamSize: targetSize,
+      veryHardScore: getTeamVeryHardScore(raw),
+      correctnessScoreTotal: getTeamCorrectnessTotal(raw),
+      validSubmissionsCount: validCount,
       submissionStatus:
-        (sorted[i].members || []).filter((m) => m.prSubmitted).length === 4
+        validCount === targetSize
           ? 'ALL_VALID'
-          : (sorted[i].members || []).filter((m) => m.prSubmitted).length > 0
+          : validCount > 0
           ? 'PARTIAL'
           : 'PENDING_PRS',
     };
@@ -445,8 +495,18 @@ export function getAwardsSummary(teams: Team[]): AwardsSummary {
 }
 
 export function mapFirestoreToTeam(data: FirestoreTeam, rank: number = 0, prevRank: number = 0): Team {
+  const earnedXP = getTeamEarnedXP(data);
+  const bonusXP = getTeamBonusXP(data);
+  const totalXP = getTeamTotalXP(data);
+  const configuredTeamSize = data.configuredTeamSize || 4;
+
   return {
     ...data,
+    earnedXP,
+    bonusXP,
+    totalXP,
+    totalScore: totalXP,
+    configuredTeamSize,
     rank: rank || 1,
     previousRank: prevRank || rank || 1,
   };
@@ -571,6 +631,36 @@ export const teamService = {
   },
 
   /**
+   * Fetches a team by its ID.
+   */
+  async getTeamById(teamId: string): Promise<Team | null> {
+    if (!isFirebaseConfigured()) {
+      const found = inMemoryTeams.find((t) => t.id === teamId || t.repositoryId === teamId);
+      return found ?? null;
+    }
+    try {
+      const docSnap = await getDoc(doc(db, COLLECTION_NAME, teamId));
+      if (!docSnap.exists()) return null;
+      return mapFirestoreToTeam({ id: docSnap.id, ...docSnap.data() } as FirestoreTeam);
+    } catch {
+      const found = inMemoryTeams.find((t) => t.id === teamId || t.repositoryId === teamId);
+      return found ?? null;
+    }
+  },
+
+  /**
+   * Updates partial fields of a team document.
+   */
+  async updateTeam(teamId: string, updates: Partial<FirestoreTeam>): Promise<void> {
+    if (isFirebaseConfigured()) {
+      await updateDoc(doc(db, COLLECTION_NAME, teamId), updates);
+    } else {
+      inMemoryTeams = inMemoryTeams.map((t) => (t.id === teamId ? { ...t, ...updates } : t));
+      notifyListeners();
+    }
+  },
+
+  /**
    * Fetches a team by ID or by repository name (e.g. "squard_1").
    */
   async getTeamByRepository(repoNameOrId: string): Promise<Team | null> {
@@ -659,8 +749,86 @@ export const teamService = {
   },
 
   /**
+   * Approves a 5-member team with an administrative justification reason.
+   */
+  async approveFiveMemberTeam(
+    teamId: string,
+    reason: string,
+    adminUsername: string
+  ): Promise<AdminAuditLog> {
+    return this.setTeamConfiguredSize(teamId, 5, reason, adminUsername);
+  },
+
+  /**
+   * Sets the configured team size (4 or 5) for a team with mandatory reason and audit logging.
+   */
+  async setTeamConfiguredSize(
+    teamId: string,
+    size: 4 | 5,
+    reason: string,
+    adminUsername: string
+  ): Promise<AdminAuditLog> {
+    if (size !== 4 && size !== 5) {
+      throw new Error('Configurable allowed team sizes are strictly 4 or 5 members.');
+    }
+    if (!reason || !reason.trim()) {
+      throw new Error("A mandatory justification reason is required when changing a team's configured size.");
+    }
+    if (!adminUsername || !adminUsername.trim()) {
+      throw new Error('Unauthorized: Admin username is required to change team size.');
+    }
+
+    const now = new Date().toISOString();
+    const auditId = `audit_team_size_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const team = await this.getTeamById(teamId);
+    if (!team) {
+      throw new Error(`Team with ID "${teamId}" not found.`);
+    }
+
+    const previousSize = team.configuredTeamSize || 4;
+
+    const auditLog: AdminAuditLog = {
+      id: auditId,
+      action: 'TEAM_SIZE_CHANGED',
+      teamId,
+      performedBy: adminUsername.trim(),
+      adminUsername: adminUsername.trim(),
+      targetId: teamId,
+      targetName: team.name,
+      previousValue: { configuredTeamSize: previousSize },
+      newValue: { configuredTeamSize: size },
+      details: {
+        previousSize,
+        newSize: size,
+        reason: reason.trim(),
+      },
+      reason: reason.trim(),
+      timestamp: now,
+    };
+
+    if (isFirebaseConfigured()) {
+      await setDoc(doc(db, 'auditLogs', auditId), auditLog);
+      await updateDoc(doc(db, COLLECTION_NAME, teamId), {
+        configuredTeamSize: size,
+        sizeChangeReason: reason.trim(),
+        sizeApprovedBy: adminUsername.trim(),
+        updatedAt: now,
+      });
+    }
+
+    await this.updateTeam(teamId, {
+      configuredTeamSize: size,
+      sizeChangeReason: reason.trim(),
+      sizeApprovedBy: adminUsername.trim(),
+      updatedAt: now,
+    });
+
+    return auditLog;
+  },
+
+  /**
    * Server-side validation for team activation:
-   * Prevents activation unless the team has exactly 4 registered members,
+   * Prevents activation unless the team has its configured number of registered members (default 4, or approved 5),
    * a valid repository, no duplicate repository assignment, and no duplicate student memberships.
    */
   validateTeamForActivation(
@@ -669,10 +837,19 @@ export const teamService = {
   ): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
 
-    // 1. Exactly 4 registered members
+    // 1. Configured registered members check (default 4, or approved 5)
+    const targetSize = team.configuredTeamSize || 4;
+    if (targetSize !== 4 && targetSize !== 5) {
+      errors.push(`Configured team size must be either 4 or 5 students (received ${targetSize}).`);
+    }
+
     const memberCount = team.members ? team.members.length : 0;
-    if (memberCount !== 4) {
-      errors.push(`A competition team must have exactly 4 registered members (currently has ${memberCount}).`);
+    if (memberCount !== targetSize) {
+      if (targetSize === 4) {
+        errors.push(`A competition team must have exactly 4 registered members (currently has ${memberCount}).`);
+      } else {
+        errors.push(`A competition team must have its configured ${targetSize} registered members (currently has ${memberCount}).`);
+      }
     }
 
     // 2. Exactly one assigned repository
@@ -905,9 +1082,10 @@ export const teamService = {
 
     for (const t of teams) {
       if (t.active !== false) {
-        // 1. Member count check
+        // 1. Member count check (respects configuredTeamSize: 4 or 5)
+        const targetSize = t.configuredTeamSize || 4;
         const count = t.members ? t.members.length : 0;
-        if (count !== 4) {
+        if (count !== targetSize) {
           invalidMemberCounts.push({ teamId: t.id, teamName: t.name, count });
         }
 

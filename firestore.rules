@@ -73,6 +73,24 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Manual Bonus XP Append-Only Ledger
+    match /bonusTransactions/{bonusId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Challenge Issue Mappings
+    match /challengeMappings/{mappingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // STRICTLY CONFIDENTIAL: Private Reference Solutions Answer Key
+    // Never readable or writable by public participants
+    match /referenceSolutions/{solutionId} {
+      allow read, write: if isAdmin();
+    }
+
     // Auditable Admin Logs Collection
     match /auditLogs/{logId} {
       allow read, write: if isAdmin();

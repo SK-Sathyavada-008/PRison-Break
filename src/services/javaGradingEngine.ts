@@ -28,12 +28,25 @@ export interface IssueGradingInput {
   difficulty: IssueDifficulty;
   studentUsername: string;
   assignedStudentIssues: number[];
-  teamId: string;
+  teamId?: string;
   repositoryId: string;
   prNumber: number;
   changedFiles: PRChangedFile[];
-  commitMessages: string[];
+  commitMessages?: string[];
+  commits?: Array<{ sha?: string; message: string; author?: string; email?: string; timestamp?: string }>;
   commitAuthors?: string[];
+  testExecutionResult?: {
+    compiles?: boolean;
+    compilationPassed?: boolean;
+    testsPassed?: number;
+    testsFailed?: number;
+    totalTests?: number;
+    normalInputsPassed?: boolean;
+    edgeCasesPassed?: boolean;
+    outputMatchesExpected?: boolean;
+  };
+  expectedOutput?: string;
+  referenceSolutionSnippet?: string;
   mockExecutionResult?: {
     compiles?: boolean;
     testsPassed?: number;
@@ -43,6 +56,7 @@ export interface IssueGradingInput {
     edgeCasesPassed?: boolean;
     timeout?: boolean;
     crash?: boolean;
+    outputMatchesExpected?: boolean;
   };
   codeAnalysis?: {
     singleLetterVariables?: boolean;
@@ -50,6 +64,13 @@ export interface IssueGradingInput {
     deepNestingOrEmptyCatch?: boolean;
     missingBasicBoundaryCheck?: boolean;
     unrelatedFilesTouched?: boolean;
+    hardcodedOutputDetected?: boolean;
+    bypassedRequiredConcept?: boolean;
+    emptyCommitsDetected?: boolean;
+    duplicateCommitsDetected?: boolean;
+    formattingOnlyCommitsDetected?: boolean;
+    isStructurallyAlternative?: boolean;
+    resemblesReferenceButBroken?: boolean;
   };
   existingTeamSolvedIssues?: number[];
   aiReviewSignal?: {
@@ -135,6 +156,34 @@ export const javaGradingEngine = {
       };
     }
 
+    // Case 2b: Hardcoded output detection without algorithmic computation
+    if (input.codeAnalysis?.hardcodedOutputDetected) {
+      deductions.push(
+        'Suspicious Submission: Hardcoded output detected without algorithmic computation (-0.80).'
+      );
+      return {
+        score: 0.10,
+        deductions,
+        explanation:
+          'Correctness score 0.10: Program hardcodes expected output rather than implementing required logic.',
+        sandboxResult,
+      };
+    }
+
+    // Case 2c: Algorithmic concept bypass (e.g. calling library sort when task asks for sorting algorithm)
+    if (input.codeAnalysis?.bypassedRequiredConcept) {
+      deductions.push(
+        'Concept Bypass: Solution bypassed required algorithm using forbidden library shortcut (-0.50).'
+      );
+      return {
+        score: 0.50,
+        deductions,
+        explanation:
+          'Correctness score 0.50: Algorithm requirement bypassed with library utility.',
+        sandboxResult,
+      };
+    }
+
     // Case 3: Compilation failure
     if (!sandboxResult.compilationPassed) {
       deductions.push(
@@ -184,10 +233,13 @@ export const javaGradingEngine = {
     }
 
     if (passed === total) {
+      const altNote = input.codeAnalysis?.isStructurallyAlternative
+        ? ' (Alternative valid beginner implementation verified).'
+        : '';
       return {
         score: 1.0,
         deductions: [],
-        explanation: `All ${total} automated unit tests and edge cases passed successfully.`,
+        explanation: `All ${total} automated unit tests and edge cases passed successfully.${altNote}`,
         sandboxResult,
       };
     }
@@ -285,6 +337,14 @@ export const javaGradingEngine = {
       );
     }
 
+    // 6. Concept / Algorithm Bypass
+    if (analysis.bypassedRequiredConcept) {
+      score -= 0.50;
+      deductions.push(
+        'Concept Bypass: Bypassed required concept using forbidden library shortcut (-0.50).'
+      );
+    }
+
     score = Math.max(0, Math.min(1, roundToTwoDecimals(score)));
 
     const explanation =
@@ -367,6 +427,24 @@ export const javaGradingEngine = {
       }
     }
 
+    // 3. Detect empty commits / no-op commits
+    if (input.codeAnalysis?.emptyCommitsDetected) {
+      score -= 0.20;
+      deductions.push('Empty commits: Commits with zero effective changes do not earn commit quality credit (-0.20).');
+    }
+
+    // 4. Detect duplicate commits or repeated patches
+    if (input.codeAnalysis?.duplicateCommitsDetected) {
+      score -= 0.20;
+      deductions.push('Duplicate commits: Repeated identical patches without progress (-0.20).');
+    }
+
+    // 5. Detect repeated formatting-only commits
+    if (input.codeAnalysis?.formattingOnlyCommitsDetected) {
+      score -= 0.20;
+      deductions.push('Formatting-only changes: Repeated cosmetic commits unrelated to assigned task (-0.20).');
+    }
+
     score = Math.max(0, Math.min(1, roundToTwoDecimals(score)));
 
     const explanation =
@@ -446,8 +524,18 @@ export const javaGradingEngine = {
       };
     }
 
+    const commitMessages = input.commitMessages || input.commits?.map((c) => c.message) || [];
+    const commitAuthors = input.commitAuthors || input.commits?.map((c) => c.author || '').filter((a) => !!a) || [];
+    const mockExecutionResult = input.mockExecutionResult || input.testExecutionResult;
+    const normalizedInput: IssueGradingInput = {
+      ...input,
+      commitMessages,
+      commitAuthors,
+      mockExecutionResult,
+    };
+
     // 3. Evaluate Correctness (C: 70%)
-    const correctnessResult = await this.evaluateCorrectness(input);
+    const correctnessResult = await this.evaluateCorrectness(normalizedInput);
 
     // 4. Handle Sandbox Failure / Unavailable
     if (correctnessResult.sandboxResult.status === 'SANDBOX_UNAVAILABLE') {
@@ -480,10 +568,10 @@ export const javaGradingEngine = {
     }
 
     // 5. Evaluate Code Quality (Q: 20%)
-    const qualityResult = this.evaluateCodeQuality(input);
+    const qualityResult = this.evaluateCodeQuality(normalizedInput);
 
     // 6. Evaluate Commit Quality (M: 10%)
-    const commitResult = this.evaluateCommitQuality(input);
+    const commitResult = this.evaluateCommitQuality(normalizedInput);
 
     // 7. Calculate Final Points with Formula
     const awardedPoints = calculateAwardedPoints(
@@ -554,6 +642,12 @@ export const javaGradingEngine = {
         unassignedIssueDetected: false,
         authorMismatch: commitResult.authorMismatch,
         sandboxAvailable: true,
+        hardcodedOutputDetected: !!input.codeAnalysis?.hardcodedOutputDetected,
+        conceptBypassed: !!input.codeAnalysis?.bypassedRequiredConcept,
+        emptyCommitsDetected: !!input.codeAnalysis?.emptyCommitsDetected,
+        duplicateCommitsDetected: !!input.codeAnalysis?.duplicateCommitsDetected,
+        formattingOnlyDetected: !!input.codeAnalysis?.formattingOnlyCommitsDetected,
+        isStructurallyAlternative: !!input.codeAnalysis?.isStructurallyAlternative,
       },
     };
   },

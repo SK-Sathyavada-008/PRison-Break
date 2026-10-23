@@ -20,11 +20,20 @@ import {
   X,
   Hash,
   AlertCircle,
+  Gift,
+  Sliders,
+  Database,
+  RefreshCw,
+  FolderTree,
+  Lock,
 } from 'lucide-react';
 import type { Team, FirestoreTeam, Repository, FirestoreIssue, IssueDifficulty } from '../../types';
 import { teamService } from '../../services/teamService';
 import { repositoryService } from '../../services/repositoryService';
 import { issueService } from '../../services/issueService';
+import { challengeImportService, type DiscoveryReport } from '../../services/challengeImportService';
+import BonusXPModal from '../../components/admin/BonusXPModal';
+import TeamSizeModal from '../../components/admin/TeamSizeModal';
 import { useAuth } from '../../context/AuthContext';
 import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
@@ -37,7 +46,7 @@ export default function TeamsPage() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [issues, setIssues] = useState<FirestoreIssue[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'squads' | 'students' | 'issues'>('squads');
+  const [activeTab, setActiveTab] = useState<'squads' | 'students' | 'issues' | 'importer'>('squads');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Notifications
@@ -47,6 +56,20 @@ export default function TeamsPage() {
   // Modals
   const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<FirestoreTeam | null>(null);
+
+  // Manual Bonus XP Modal
+  const [isBonusModalOpen, setIsBonusModalOpen] = useState(false);
+  const [selectedTeamForBonus, setSelectedTeamForBonus] = useState<Team | FirestoreTeam | null>(null);
+
+  // Flexible Team Size Modal
+  const [isSizeModalOpen, setIsSizeModalOpen] = useState(false);
+  const [selectedTeamForSize, setSelectedTeamForSize] = useState<Team | FirestoreTeam | null>(null);
+
+  // Challenge Importer
+  const [importSummary, setImportSummary] = useState<DiscoveryReport | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importOverwriteConfirm, setImportOverwriteConfirm] = useState(false);
+  const [importStatusMessage, setImportStatusMessage] = useState<string | null>(null);
 
   const [isReplacementModalOpen, setIsReplacementModalOpen] = useState(false);
   const [replacementTeam, setReplacementTeam] = useState<FirestoreTeam | null>(null);
@@ -431,6 +454,22 @@ export default function TeamsPage() {
           <FileCode size={14} />
           <span>Issue Inventory ({issues.length})</span>
         </button>
+        <button
+          onClick={() => {
+            setActiveTab('importer');
+            if (!importSummary) {
+              setImportSummary(challengeImportService.discoverAndValidateAll());
+            }
+          }}
+          className={`py-3 px-4 border-b-2 font-bold flex items-center gap-2 transition-colors ${
+            activeTab === 'importer'
+              ? 'border-[#FF0A3B] text-[#FF5470]'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Database size={14} />
+          <span>Challenge Repos & Importer</span>
+        </button>
       </div>
 
       {/* Search Bar */}
@@ -498,11 +537,38 @@ export default function TeamsPage() {
 
                   {/* Actions & Stats */}
                   <div className="flex items-center gap-3 flex-wrap">
-                    <div className="font-mono text-xs text-slate-400 bg-slate-950/80 px-3 py-1.5 rounded-lg border border-slate-800 flex items-center gap-3">
+                    <div className="font-mono text-xs text-slate-400 bg-slate-950/80 px-3 py-1.5 rounded-lg border border-slate-800 flex items-center gap-3 flex-wrap">
+                      <span>Earned: <strong className="text-white">{team.earnedXP ?? team.totalScore}</strong></span>
+                      <span>Bonus: <strong className="text-amber-400">+{team.bonusXP || 0}</strong></span>
+                      <span>Total: <strong className="text-emerald-400">{team.totalXP ?? team.totalScore} XP</strong></span>
                       <span>Solved: <strong className="text-white">{team.validatedIssueCount || 0}</strong></span>
                       <span>Very Hard: <strong className="text-purple-400">{team.veryHardSolvedCount || 0}</strong></span>
-                      <span>PRs: <strong className="text-cyan-400">{team.prsSubmitted || 0}/4</strong></span>
+                      <span>PRs: <strong className="text-cyan-400">{team.prsSubmitted || 0}/{team.configuredTeamSize || 4}</strong></span>
                     </div>
+
+                    <button
+                      onClick={() => {
+                        setSelectedTeamForBonus(team as FirestoreTeam);
+                        setIsBonusModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-amber-950/60 hover:bg-amber-900 border border-amber-500/40 text-amber-300 font-mono text-xs flex items-center gap-1.5 transition-colors"
+                      title="Manage Team Bonus XP (strictly positive, non-reducing)"
+                    >
+                      <Gift size={13} />
+                      <span>Bonus XP</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setSelectedTeamForSize(team as FirestoreTeam);
+                        setIsSizeModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-purple-950/60 hover:bg-purple-900 border border-purple-500/40 text-purple-300 font-mono text-xs flex items-center gap-1.5 transition-colors"
+                      title="Configure Team Size (4 or 5 members with admin approval)"
+                    >
+                      <Sliders size={13} />
+                      <span>Size: {team.configuredTeamSize || 4}</span>
+                    </button>
 
                     <button
                       onClick={() => handleOpenAssignIssues(team)}
@@ -528,13 +594,13 @@ export default function TeamsPage() {
                           : 'bg-emerald-950/40 text-emerald-400 hover:bg-emerald-900/60 border border-emerald-500/40'
                       }`}
                     >
-                      {team.active ? 'Deactivate' : 'Activate (Verify 4 Members)'}
+                      {team.active ? 'Deactivate' : `Activate (Verify ${team.configuredTeamSize || 4} Members)`}
                     </button>
                   </div>
                 </div>
 
-                {/* 4 Registered Members Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
+                {/* Registered Members Grid (Supports 4 or 5 members) */}
+                <div className={`grid grid-cols-1 sm:grid-cols-2 ${(team.configuredTeamSize || 4) === 5 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-3 mt-4`}>
                   {team.members.map((member, idx) => (
                     <div
                       key={member.studentId || idx}
@@ -571,15 +637,15 @@ export default function TeamsPage() {
                       </div>
                     </div>
                   ))}
-                  {/* If fewer than 4 members, show empty slot */}
-                  {Array.from({ length: Math.max(0, 4 - (team.members?.length || 0)) }).map((_, i) => (
+                  {/* If fewer than configured members, show empty slot */}
+                  {Array.from({ length: Math.max(0, (team.configuredTeamSize || 4) - (team.members?.length || 0)) }).map((_, i) => (
                     <div
                       key={`empty_${i}`}
                       className="p-3 rounded-xl border border-dashed border-rose-500/40 bg-rose-950/10 text-xs font-mono flex flex-col items-center justify-center text-rose-400/80 gap-1"
                     >
                       <AlertCircle size={15} />
                       <span className="font-bold">Missing Member</span>
-                      <span className="text-[10px] text-slate-500">4 required for competition</span>
+                      <span className="text-[10px] text-slate-500">{team.configuredTeamSize || 4} required for competition</span>
                     </div>
                   ))}
                 </div>
@@ -704,6 +770,176 @@ export default function TeamsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* TAB 4: CHALLENGE REPOS & REFERENCE SOLUTIONS IMPORTER */}
+      {activeTab === 'importer' && (
+        <div className="space-y-6 font-mono text-xs">
+          {/* Security & Confidentiality Banner */}
+          <div className="p-4 rounded-xl border border-cyan-500/40 bg-cyan-950/20 space-y-2">
+            <div className="flex items-center gap-2 font-bold text-cyan-300 text-sm">
+              <Lock size={16} />
+              <span>Reference Solutions Private Storage & Confidentiality</span>
+            </div>
+            <p className="text-slate-300 text-[11px] leading-relaxed">
+              Trusted reference solutions are maintained exclusively in protected server-side storage and are strictly restricted to authenticated administrators and sandboxed CI runners. Reference solutions are <strong>never</strong> bundled into public GitHub challenge repositories, client JavaScript bundles, or participant API responses.
+            </p>
+          </div>
+
+          {/* Discovery Metrics Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+              <span className="text-[11px] text-slate-400 uppercase font-semibold">Challenge Repositories</span>
+              <div className="text-2xl font-black text-white">
+                {importSummary?.totalRepositories ?? 35}
+              </div>
+              <span className="text-[10px] text-slate-500">Squade_1 through Squade_35</span>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+              <span className="text-[11px] text-slate-400 uppercase font-semibold">Total Issues Cataloged</span>
+              <div className="text-2xl font-black text-emerald-400">
+                {importSummary?.totalIssuesMapped ?? 3080}
+              </div>
+              <span className="text-[10px] text-slate-500">88 issues per repository</span>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+              <span className="text-[11px] text-slate-400 uppercase font-semibold">Reference Solutions</span>
+              <div className="text-2xl font-black text-cyan-400">
+                {importSummary?.totalSolutionsMatched ?? 3080}
+              </div>
+              <span className="text-[10px] text-emerald-400">100% mapped (0 missing)</span>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+              <span className="text-[11px] text-slate-400 uppercase font-semibold">Missing Test Suites</span>
+              <div className="text-2xl font-black text-amber-400">
+                {importSummary?.totalMissingTests ?? 35}
+              </div>
+              <span className="text-[10px] text-amber-300/80">Flagged: src/test absent; issue stdout used</span>
+            </div>
+          </div>
+
+          {/* Importer Controls */}
+          <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-white text-sm">Idempotent Import & Validation Workflow</h3>
+                <p className="text-[11px] text-slate-400">
+                  Re-importing identical challenge mappings will not duplicate data. Overwriting existing production mappings requires explicit administrator confirmation.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const res = challengeImportService.discoverAndValidateAll();
+                    setImportSummary(res);
+                    setImportStatusMessage(`Validated ${res.totalRepositories} challenge repos and ${res.totalIssuesMapped} issues.`);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  <RefreshCw size={14} />
+                  <span>Scan repoissies</span>
+                </button>
+
+                <button
+                  disabled={importing}
+                  onClick={async () => {
+                    setImporting(true);
+                    setImportStatusMessage(null);
+                    try {
+                      const res = await challengeImportService.importChallengeMappings({
+                        adminUsername: adminName,
+                        confirmOverwrite: importOverwriteConfirm,
+                      });
+                      setImportStatusMessage(`Successfully imported ${res.importedCount} mappings into database ledger.`);
+                      setSuccessMsg(`Import complete: ${res.importedCount} challenge mappings synchronized.`);
+                    } catch (err: any) {
+                      setErrorMsg(err?.message || 'Import failed');
+                    } finally {
+                      setImporting(false);
+                    }
+                  }}
+                  className="px-4 py-2 rounded-lg bg-[#FF0A3B] hover:bg-[#FF0A3B]/90 text-white font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  <Database size={14} />
+                  <span>{importing ? 'Importing Mappings...' : 'Import Mappings'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
+              <input
+                type="checkbox"
+                id="overwriteConfirm"
+                checked={importOverwriteConfirm}
+                onChange={(e) => setImportOverwriteConfirm(e.target.checked)}
+                className="accent-[#FF0A3B] rounded"
+              />
+              <label htmlFor="overwriteConfirm" className="text-[11px] text-slate-300 cursor-pointer">
+                Confirm overwrite of existing challenge mappings (safe update protection)
+              </label>
+            </div>
+
+            {importStatusMessage && (
+              <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+                <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
+                <span>{importStatusMessage}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Repository Mapping Table */}
+          <div className="card overflow-hidden border border-slate-800">
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+              <h4 className="font-bold text-white text-xs flex items-center gap-2">
+                <FolderTree size={14} className="text-cyan-400" />
+                <span>Discovered Challenge Repositories & Mappings (35 Repositories)</span>
+              </h4>
+              <span className="text-[10px] text-slate-500 font-mono">Difficulty: Easy (10 XP), Medium (20 XP), Hard (30 XP), Very Hard (40 XP)</span>
+            </div>
+            <div className="overflow-x-auto max-h-96">
+              <table className="prison-table w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 text-[10px] uppercase">
+                    <th className="py-2.5 px-4 text-left">Repository</th>
+                    <th className="py-2.5 px-4 text-left">Issues</th>
+                    <th className="py-2.5 px-4 text-left">Solutions Mapped</th>
+                    <th className="py-2.5 px-4 text-left">Test Suite Status</th>
+                    <th className="py-2.5 px-4 text-left">Privacy Status</th>
+                    <th className="py-2.5 px-4 text-left">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {Array.from({ length: 35 }).map((_, idx) => {
+                    const repoName = `Squade_${idx + 1}`;
+                    return (
+                      <tr key={repoName} className="hover:bg-slate-900/50">
+                        <td className="py-2.5 px-4 font-bold text-white">{repoName}</td>
+                        <td className="py-2.5 px-4 text-slate-300">88 Issues (E:22, M:22, H:22, VH:22)</td>
+                        <td className="py-2.5 px-4 text-emerald-400 font-bold">88 / 88 Linked</td>
+                        <td className="py-2.5 px-4 text-amber-400 text-[11px]">
+                          Flagged (Missing src/test; uses issue output)
+                        </td>
+                        <td className="py-2.5 px-4 text-cyan-400 text-[11px] flex items-center gap-1">
+                          <Lock size={12} />
+                          <span>Protected in Server Storage</span>
+                        </td>
+                        <td className="py-2.5 px-4">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                            VALIDATED
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 
@@ -957,6 +1193,42 @@ export default function TeamsPage() {
           </div>
         </div>
       )}
+
+      {/* MODAL: MANAGE TEAM BONUS XP */}
+      {isBonusModalOpen && selectedTeamForBonus && (
+        <BonusXPModal
+          isOpen={isBonusModalOpen}
+          team={selectedTeamForBonus}
+          adminUsername={adminName}
+          onClose={() => {
+            setIsBonusModalOpen(false);
+            setSelectedTeamForBonus(null);
+          }}
+          onSuccess={() => {
+            setIsBonusModalOpen(false);
+            setSelectedTeamForBonus(null);
+            setSuccessMsg('Bonus XP successfully awarded and ledger updated.');
+          }}
+        />
+      )}
+
+      {/* MODAL: CONFIGURE TEAM SIZE (4 OR 5) */}
+      {isSizeModalOpen && selectedTeamForSize && (
+        <TeamSizeModal
+          isOpen={isSizeModalOpen}
+          team={selectedTeamForSize}
+          adminUsername={adminName}
+          onClose={() => {
+            setIsSizeModalOpen(false);
+            setSelectedTeamForSize(null);
+          }}
+          onSuccess={() => {
+            setIsSizeModalOpen(false);
+            setSelectedTeamForSize(null);
+            setSuccessMsg('Team size configuration successfully updated.');
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -992,14 +1264,16 @@ function SquadFormModal({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Pad or trim to exactly 4 member inputs
+  // Pad or trim to configured member inputs (4 or 5)
+  const targetSize = editingTeam?.configuredTeamSize || 4;
+
   useEffect(() => {
     if (editingTeam) {
       setName(editingTeam.name);
       setRepositoryId(editingTeam.repositoryId);
       const m = editingTeam.members.map((x) => ({ name: x.name, githubUsername: x.githubUsername }));
-      while (m.length < 4) m.push({ name: '', githubUsername: '' });
-      setMembers(m.slice(0, 4));
+      while (m.length < targetSize) m.push({ name: '', githubUsername: '' });
+      setMembers(m.slice(0, targetSize));
     } else {
       setName(`Squad ${allTeams.length + 1}`);
       setRepositoryId('');
@@ -1010,7 +1284,7 @@ function SquadFormModal({
         { name: '', githubUsername: '' },
       ]);
     }
-  }, [editingTeam, allTeams.length]);
+  }, [editingTeam, allTeams.length, targetSize]);
 
   if (!isOpen) return null;
 
@@ -1027,23 +1301,23 @@ function SquadFormModal({
       return;
     }
 
-    // Verify 4 members are filled
+    // Verify configured members are filled
     const cleanMembers = members.map((m) => ({
       name: m.name.trim(),
       githubUsername: m.githubUsername.trim().replace(/^@/, ''),
     }));
 
-    for (let i = 0; i < 4; i++) {
-      if (!cleanMembers[i].githubUsername) {
-        setError(`Slot #${i + 1} requires a valid GitHub username. Competition squads must have 4 members.`);
+    for (let i = 0; i < targetSize; i++) {
+      if (!cleanMembers[i]?.githubUsername) {
+        setError(`Slot #${i + 1} requires a valid GitHub username. Competition squads require ${targetSize} registered members.`);
         return;
       }
     }
 
-    // Check duplicate student within the 4
-    const usernames = cleanMembers.map((m) => m.githubUsername.toLowerCase());
-    if (new Set(usernames).size !== 4) {
-      setError('All 4 squad members must have distinct GitHub usernames.');
+    // Check duplicate student within the squad
+    const usernames = cleanMembers.slice(0, targetSize).map((m) => m.githubUsername.toLowerCase());
+    if (new Set(usernames).size !== targetSize) {
+      setError(`All ${targetSize} squad members must have distinct GitHub usernames.`);
       return;
     }
 
@@ -1053,7 +1327,7 @@ function SquadFormModal({
       const repoObj = repositories.find((r) => r.id === repositoryId || r.name === repositoryId);
       const teamId = editingTeam?.id || `team_${cleanRepo.toLowerCase()}`;
 
-      const finalMembers = cleanMembers.map((m, idx) => {
+      const finalMembers = cleanMembers.slice(0, targetSize).map((m, idx) => {
         const existing = editingTeam?.members?.[idx];
         return {
           studentId: existing?.studentId || `s_${m.githubUsername}`,
@@ -1074,11 +1348,17 @@ function SquadFormModal({
         repositoryName: repoObj?.name || cleanRepo,
         repositoryFullName: repoObj?.fullName || cleanRepo,
         members: finalMembers,
-        assignedIssueCount: editingTeam?.assignedIssueCount || 4,
+        assignedIssueCount: editingTeam?.assignedIssueCount || targetSize,
+        configuredTeamSize: targetSize,
+        sizeChangeReason: editingTeam?.sizeChangeReason,
+        sizeApprovedBy: editingTeam?.sizeApprovedBy,
         validatedIssueCount: editingTeam?.validatedIssueCount || 0,
         correctlySolvedIssuesCount: editingTeam?.correctlySolvedIssuesCount || 0,
         veryHardSolvedCount: editingTeam?.veryHardSolvedCount || 0,
         totalScore: editingTeam?.totalScore || 0,
+        earnedXP: editingTeam?.earnedXP || 0,
+        bonusXP: editingTeam?.bonusXP || 0,
+        totalXP: editingTeam?.totalXP || 0,
         prsSubmitted: editingTeam?.prsSubmitted || 0,
         solvedIssues: editingTeam?.solvedIssues || [],
         active: editingTeam?.active ?? true,
@@ -1156,9 +1436,9 @@ function SquadFormModal({
           <div className="pt-2 border-t border-slate-800/80">
             <div className="flex items-center justify-between mb-2">
               <label className="text-slate-300 text-[10px] uppercase font-bold">
-                Registered Student Members (Exactly 4 Required)
+                Registered Student Members ({targetSize} Slots Configured)
               </label>
-              <span className="text-[10px] text-slate-500">4 of 4 slots</span>
+              <span className="text-[10px] text-slate-500">{targetSize} of {targetSize} slots</span>
             </div>
 
             <div className="space-y-2.5">

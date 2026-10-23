@@ -190,8 +190,27 @@ const TeamLeaderboardRow = memo(function TeamLeaderboardRow({
         </div>
       </td>
 
-      {/* 4. Total Validated Team XP */}
-      <td className="py-4 px-4 font-mono text-left">
+      {/* 4. Earned XP */}
+      <td className="py-4 px-3 font-mono text-left whitespace-nowrap">
+        <span className="text-slate-300 font-bold text-sm">
+          {(t.earnedXP ?? (t.totalScore !== undefined && t.bonusXP !== undefined ? Math.max(0, t.totalScore - t.bonusXP) : (t.totalScore ?? 0))).toLocaleString()}
+        </span>
+        <span className="text-[10px] text-slate-500 ml-1">XP</span>
+      </td>
+
+      {/* 5. Bonus XP */}
+      <td className="py-4 px-3 font-mono text-left whitespace-nowrap">
+        {(t.bonusXP && t.bonusXP > 0) ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold text-xs">
+            +{t.bonusXP.toLocaleString()} XP
+          </span>
+        ) : (
+          <span className="text-slate-600 text-xs">0 XP</span>
+        )}
+      </td>
+
+      {/* 6. Total Validated Team XP */}
+      <td className="py-4 px-4 font-mono text-left whitespace-nowrap">
         <div className="flex items-center gap-1.5">
           <Zap size={16} className="text-emerald-400 fill-emerald-400/20" />
           <span
@@ -199,13 +218,13 @@ const TeamLeaderboardRow = memo(function TeamLeaderboardRow({
               projectorMode ? 'text-xl sm:text-2xl' : 'text-lg sm:text-xl'
             }`}
           >
-            {t.totalScore.toLocaleString()}
+            {(t.totalXP ?? t.totalScore ?? 0).toLocaleString()}
           </span>
           <span className="text-xs text-slate-500 font-normal ml-0.5">XP</span>
         </div>
       </td>
 
-      {/* 5. Solved Issues Count & Difficulty Breakdown */}
+      {/* 7. Solved Issues Count & Difficulty Breakdown */}
       <td className="py-4 px-4 font-mono">
         <div className="flex items-center gap-1.5 flex-wrap">
           {easyCount > 0 && (
@@ -238,8 +257,8 @@ const TeamLeaderboardRow = memo(function TeamLeaderboardRow({
         </div>
       </td>
 
-      {/* 6. Very Hard Issues Accurately Solved */}
-      <td className="py-4 px-4 font-mono">
+      {/* 8. Very Hard Issues Accurately Solved */}
+      <td className="py-4 px-4 font-mono whitespace-nowrap">
         {vHardCount > 0 ? (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/50 border border-rose-500/60 text-rose-400 font-bold text-xs shadow-sm shadow-rose-950/40">
             <Flame size={13} className="text-rose-400 animate-pulse" />
@@ -250,26 +269,31 @@ const TeamLeaderboardRow = memo(function TeamLeaderboardRow({
         )}
       </td>
 
-      {/* 7. Registered Students with Valid Submissions */}
-      <td className="py-4 px-4 font-mono">
+      {/* 9. Registered Team Members */}
+      <td className="py-4 px-4 font-mono whitespace-nowrap">
         <div className="inline-flex items-center gap-1.5">
           <span
             className={`font-bold text-xs ${
-              validStudentsCount === 4
+              validStudentsCount === (t.configuredTeamSize || members.length || 4)
                 ? 'text-emerald-400'
                 : validStudentsCount > 0
                 ? 'text-slate-300'
                 : 'text-slate-500'
             }`}
           >
-            {validStudentsCount} / 4 Students
+            {validStudentsCount} / {t.configuredTeamSize || members.length || 4} Members
           </span>
+          {t.configuredTeamSize === 5 && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-950/50 border border-indigo-500/40 text-indigo-300">
+              5-Squad
+            </span>
+          )}
         </div>
       </td>
 
-      {/* 8. Submission / Grading Status */}
-      <td className="py-4 px-4 font-mono">
-        {validStudentsCount === 4 ? (
+      {/* 10. Submission / Grading Status */}
+      <td className="py-4 px-4 font-mono whitespace-nowrap">
+        {validStudentsCount === (t.configuredTeamSize || members.length || 4) ? (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-400 text-xs font-semibold">
             <CheckCircle2 size={12} />
             <span>ALL VALID</span>
@@ -277,7 +301,7 @@ const TeamLeaderboardRow = memo(function TeamLeaderboardRow({
         ) : validStudentsCount > 0 ? (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-950/40 border border-amber-500/30 text-amber-400 text-xs font-semibold">
             <Clock size={12} />
-            <span>PARTIAL ({validStudentsCount}/4)</span>
+            <span>PARTIAL ({validStudentsCount}/{t.configuredTeamSize || members.length || 4})</span>
           </span>
         ) : (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-500 text-xs">
@@ -346,22 +370,28 @@ export default function LeaderboardTable({
               Rank
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              Assigned Repository
+              Repository
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              Squad Team
+              Team Name
+            </th>
+            <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-3">
+              Earned XP
+            </th>
+            <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-3">
+              Bonus XP
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              Team Score
+              Total XP
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              Solved Issues
+              Correctly Solved
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
               Very Hard Solved
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
-              Valid PRs
+              Team Members
             </th>
             <th className="text-left font-mono text-xs uppercase tracking-wider text-slate-400 py-4 px-4">
               Submission Status

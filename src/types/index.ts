@@ -92,6 +92,12 @@ export interface IssueGradingRecord {
     unassignedIssueDetected: boolean;
     authorMismatch: boolean;
     sandboxAvailable: boolean;
+    hardcodedOutputDetected?: boolean;
+    conceptBypassed?: boolean;
+    emptyCommitsDetected?: boolean;
+    duplicateCommitsDetected?: boolean;
+    formattingOnlyDetected?: boolean;
+    isStructurallyAlternative?: boolean;
   };
 }
 
@@ -170,8 +176,14 @@ export interface FirestoreTeam {
   repositoryId: string; // e.g. "squard_1"
   repositoryName: string; // e.g. "squard_1" (The actual registered repository name displayed on public leaderboard)
   repositoryFullName?: string; // e.g. "PRison-Break-2026/squard_1"
-  members: TeamMember[]; // Exactly 4 registered student members for active competition team
-  totalScore: number;
+  members: TeamMember[]; // Registered student members (default 4, or approved 5)
+  configuredTeamSize?: number; // 4 or 5 (default 4)
+  sizeChangeReason?: string;
+  sizeApprovedBy?: string;
+  earnedXP?: number; // XP earned solely from validated issue solutions
+  bonusXP?: number; // Manual bonus XP awarded by administrators
+  totalXP?: number; // Combined total XP: totalXP = earnedXP + bonusXP
+  totalScore: number; // Backward-compatible aggregate score (= totalXP)
   assignedIssueCount: number; // Number of assigned issues
   validatedIssueCount: number; // Number of correctly solved issues
   correctlySolvedIssuesCount?: number;
@@ -207,6 +219,71 @@ export interface AwardsSummary {
   };
 }
 
+export interface BonusTransaction {
+  id: string; // e.g. "bonus_tx_1712345678"
+  teamId: string;
+  teamName?: string;
+  repositoryName?: string;
+  amount: number; // strictly positive
+  reason: string; // mandatory reason
+  adminId?: string;
+  adminUsername: string;
+  timestamp: string;
+  idempotencyKey?: string;
+  previousBonusXP?: number;
+  newBonusXP?: number;
+  previousTotalXP?: number;
+  newTotalXP?: number;
+}
+
+export interface ChallengeMapping {
+  id: string;
+  repositoryName: string; // e.g. "Squade_1"
+  issueNumber: number;
+  difficulty: IssueDifficulty;
+  basePoints: number;
+  title: string;
+  topic?: string;
+  starterFile: string;
+  solutionFile?: string;
+  hasSolution: boolean;
+  expectedOutput: string;
+  hasExistingTests: boolean;
+  missingTestsReport: boolean;
+  isAmbiguous: boolean;
+  needsOrganizerReview: boolean;
+  reviewNotes?: string;
+  verifiedAt?: string;
+}
+
+export interface ChallengeRepoImportSummary {
+  repositoryName: string;
+  issuesFound: number;
+  solutionsFound: number;
+  missingSolutions: string[];
+  missingTests: string[];
+  duplicateMappings: string[];
+  conflicts: string[];
+  status: 'VALIDATED' | 'WARNINGS' | 'FLAGGED_FOR_REVIEW';
+  warnings: string[];
+}
+
+export interface PrivateReferenceSolution {
+  id: string; // e.g. "sol_Squade_1_Issue01"
+  repositoryName: string;
+  issueNumber: number;
+  fileName: string;
+  starterPath: string;
+  solutionPath: string;
+  expectedOutput: string;
+  topic?: string;
+  difficulty: IssueDifficulty;
+  correctionNotes?: string;
+  hiddenAssertions?: string[];
+  isPrivate: true;
+  createdAt: string;
+}
+
 export interface AdminAuditLog {
   id: string;
   action:
@@ -221,7 +298,11 @@ export interface AdminAuditLog {
     | 'ATTRIBUTION_CONFLICT'
     | 'PR_APPROVAL'
     | 'PR_REJECTION'
-    | 'PR_REQUEST_REVIEW';
+    | 'PR_REQUEST_REVIEW'
+    | 'MANUAL_BONUS_AWARD'
+    | 'TEAM_SIZE_CHANGED'
+    | 'CHALLENGE_REPO_IMPORTED'
+    | 'MAPPING_CORRECTION';
   teamId?: string;
   repositoryId?: string;
   issueNumber?: number;

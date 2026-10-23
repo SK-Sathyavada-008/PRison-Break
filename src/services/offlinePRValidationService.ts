@@ -31,6 +31,7 @@ import type {
 import { extractAllLinkedIssues } from './prValidationPipeline';
 import { javaGradingEngine, roundToTwoDecimals } from './javaGradingEngine';
 import { issueService } from './issueService';
+import { teamService } from './teamService';
 
 export interface CommitMetadata {
   sha: string;
@@ -569,8 +570,14 @@ export const offlinePRValidationService = {
           };
         }
 
+        const currentBonus = teamData.bonusXP || 0;
+        const newTotalXP = roundToTwoDecimals(aggregatedTeamScore + currentBonus);
+
         await updateDoc(teamDocRef, {
-          totalScore: aggregatedTeamScore,
+          earnedXP: aggregatedTeamScore,
+          bonusXP: currentBonus,
+          totalXP: newTotalXP,
+          totalScore: newTotalXP,
           solvedIssues: solvedIssuesList,
           validatedIssueCount: solvedIssuesList.length,
           correctlySolvedIssuesCount: solvedIssuesList.length,
@@ -578,6 +585,54 @@ export const offlinePRValidationService = {
           members,
           updatedAt: now,
           ...(result.isMerged ? { lastMergedAt: now } : {}),
+        });
+      }
+    } else {
+      // In-Memory update for tests / offline mode
+      const team = await teamService.getTeamById(teamId);
+      if (team && result.totalAwardedPoints > 0) {
+        const members = team.members ? [...team.members] : [];
+        const memberIdx = members.findIndex((m) => m.githubUsername.toLowerCase() === cleanUsername);
+        if (memberIdx >= 0) {
+          members[memberIdx] = {
+            ...members[memberIdx],
+            prSubmitted: true,
+            prNumber: context.prNumber,
+            score: (members[memberIdx].score || 0) + result.totalAwardedPoints,
+            totalScore: (members[memberIdx].totalScore || 0) + result.totalAwardedPoints,
+            validationStatus: result.status,
+          };
+        }
+
+        const newEarned = roundToTwoDecimals((team.earnedXP ?? team.totalScore ?? 0) + result.totalAwardedPoints);
+        const currentBonus = team.bonusXP ?? 0;
+        const newTotalXP = roundToTwoDecimals(newEarned + currentBonus);
+
+        const newSolved = [...(team.solvedIssues || [])];
+        for (const g of result.gradingRecords) {
+          if (!newSolved.some((s) => s.issueNumber === g.issueNumber)) {
+            newSolved.push({
+              issueNumber: g.issueNumber,
+              difficulty: g.difficulty,
+              points: g.awardedPoints,
+              solvedByUsername: context.authorUsername,
+              prNumber: context.prNumber,
+              solvedAt: now,
+            });
+          }
+        }
+
+        await teamService.updateTeam(teamId, {
+          earnedXP: newEarned,
+          bonusXP: currentBonus,
+          totalXP: newTotalXP,
+          totalScore: newTotalXP,
+          members,
+          solvedIssues: newSolved,
+          validatedIssueCount: newSolved.length,
+          correctlySolvedIssuesCount: newSolved.length,
+          veryHardSolvedCount: newSolved.filter((s) => s.difficulty === 'VERY_HARD').length,
+          updatedAt: now,
         });
       }
     }

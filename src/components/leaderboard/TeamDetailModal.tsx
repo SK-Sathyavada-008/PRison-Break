@@ -140,21 +140,42 @@ export default function TeamDetailModal({
                   <ExternalLink size={12} className="opacity-70" />
                 </a>
                 <span className="text-slate-500">
-                  {members.filter((m) => m.prSubmitted).length} of 4 PRs Submitted
+                  {members.filter((m) => m.prSubmitted).length} of {team.configuredTeamSize || members.length || 4} PRs Submitted
                 </span>
+                {team.configuredTeamSize === 5 && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-950/60 border border-indigo-500/40 text-indigo-300">
+                    5-Student Squad
+                  </span>
+                )}
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Total Score Pill */}
-            <div className="text-right hidden sm:block">
-              <div className="text-xs text-slate-400 font-mono flex items-center justify-end gap-1">
-                <Zap size={12} className="text-emerald-400" />
-                <span>TOTAL XP</span>
+            {/* Score Breakdown Pill */}
+            <div className="text-right hidden sm:flex items-center gap-3">
+              <div className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-right">
+                <div className="text-[10px] text-slate-400 font-mono">EARNED XP</div>
+                <div className="text-sm font-bold font-mono text-slate-200">
+                  {(team.earnedXP ?? (team.totalScore !== undefined && team.bonusXP !== undefined ? Math.max(0, team.totalScore - team.bonusXP) : (team.totalScore ?? 0))).toLocaleString()}
+                </div>
               </div>
-              <div className="text-2xl font-black font-mono text-emerald-400">
-                {team.totalScore.toLocaleString()} XP
+              {team.bonusXP !== undefined && team.bonusXP > 0 && (
+                <div className="px-3 py-1.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-right">
+                  <div className="text-[10px] text-amber-400 font-mono">BONUS XP</div>
+                  <div className="text-sm font-bold font-mono text-amber-400">
+                    +{team.bonusXP.toLocaleString()}
+                  </div>
+                </div>
+              )}
+              <div className="px-3 py-1.5 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-right">
+                <div className="text-[10px] text-emerald-400 font-mono flex items-center justify-end gap-1">
+                  <Zap size={11} />
+                  <span>TOTAL XP</span>
+                </div>
+                <div className="text-xl font-black font-mono text-emerald-400">
+                  {(team.totalXP ?? team.totalScore ?? 0).toLocaleString()}
+                </div>
               </div>
             </div>
 

@@ -78,8 +78,8 @@ export const eventConfigService = {
       }
     }
 
-    if (config.requiredTeamSize !== undefined && config.requiredTeamSize !== 4) {
-      throw new Error('PRison Break strictly requires a team size of exactly 4 students.');
+    if (config.requiredTeamSize !== undefined && config.requiredTeamSize !== 4 && config.requiredTeamSize !== 5) {
+      throw new Error('PRison Break supports configurable team sizes of 4 or 5 students (default: 4).');
     }
 
     if (config.maxCompetitionPRsPerStudent !== undefined && config.maxCompetitionPRsPerStudent !== 1) {
