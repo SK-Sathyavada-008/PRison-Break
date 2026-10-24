@@ -20,6 +20,7 @@ import { extractAllLinkedIssues } from './prValidationPipeline';
 import { scoringEngine } from './scoringEngine';
 import { mapFirestoreToPullRequest } from './pullRequestService';
 import { aiValidationService } from './aiValidationService';
+import { evaluateIssueSolution, type IssueEvaluationResult } from './javaSolutionEvaluator';
 
 export interface GitHubSyncOptions {
   githubToken?: string;
@@ -192,8 +193,28 @@ export const githubSyncService = {
         const prId = `pr_${repoId}_${prNumber}`;
         const labels: string[] = (pr.labels || []).map((l: any) => l.name);
 
-        // Identify all linked challenge issues
-        const issueNumbers = extractAllLinkedIssues(pr.title, pr.body);
+        // Fetch PR commits and changed files to accurately detect linked issues and evaluate code
+        let commitMessages: string[] = [];
+        try {
+          const cRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/commits`, { headers });
+          if (cRes.ok) {
+            const cData = await cRes.json();
+            if (Array.isArray(cData)) {
+              commitMessages = cData.map((c: any) => c.commit?.message || c.message || '');
+            }
+          }
+        } catch (_) {}
+
+        let prFiles: Array<{ filename: string; status: string; additions: number; deletions: number; patch?: string }> = [];
+        try {
+          prFiles = await aiValidationService.fetchPRFiles(owner, repo, prNumber, token);
+        } catch (_) {}
+
+        const filePaths = prFiles.map((f) => f.filename);
+        const textToScan = `${pr.title} ${pr.body || ''} ${commitMessages.join(' ')}`;
+
+        // Identify all linked challenge issues from title, body, commits, and file paths
+        const issueNumbers = extractAllLinkedIssues(pr.title, textToScan, filePaths);
         const issueNumber = issueNumbers.length > 0 ? issueNumbers[0] : 0;
 
         // Auto-register participant if missing
@@ -226,12 +247,33 @@ export const githubSyncService = {
           }
         }
 
+        // Evaluate each challenge issue against catalog requirements and expected output
+        const evaluatedIssues: IssueEvaluationResult[] = [];
+
+        for (const iNum of issueNumbers) {
+          const matchedFile = prFiles.find((f: any) => {
+            const numPattern = new RegExp(`Issue0*${iNum}[_\\-\\.\\/]`, 'i');
+            return numPattern.test(f.filename) || f.filename.includes(`Issue${iNum}_`);
+          });
+
+          const evalResult = await evaluateIssueSolution({
+            repoName: repo,
+            issueNumber: iNum,
+            patch: matchedFile?.patch,
+            filename: matchedFile?.filename,
+          });
+
+          evaluatedIssues.push(evalResult);
+        }
+
+        const correctlySolvedIssues = evaluatedIssues.filter((i) => i.isCorrect);
+
         // Determine validation checks & status
         const testsPassed = isMerged || (!isDraft && pr.mergeable_state !== 'dirty');
         const validationChecks = {
           participantRegistered: true,
           repositoryRegistered: true,
-          issueValid: issueNumber > 0,
+          issueValid: issueNumbers.length > 0,
           testsPassed,
           filesValid: true,
         };
@@ -240,10 +282,23 @@ export const githubSyncService = {
           `Synced directly from GitHub repository ${fullName}.`,
         ];
 
-        if (issueNumber > 0) {
-          validationReasons.push(`Linked challenge issue #${issueNumber} confirmed.`);
+        if (issueNumbers.length > 0) {
+          validationReasons.push(`Linked challenge issues: [${issueNumbers.map((n) => `#${n}`).join(', ')}].`);
         } else {
-          validationReasons.push('No issue reference detected in title or body.');
+          validationReasons.push('No issue reference detected in title, body, or files.');
+        }
+
+        if (correctlySolvedIssues.length > 0) {
+          validationReasons.push(
+            `Validated solution(s): ${correctlySolvedIssues.map((i) => `#${i.issueNumber} (${i.difficulty}, ${i.basePoints} XP)`).join(', ')}.`
+          );
+        }
+
+        const failedIssues = evaluatedIssues.filter((i) => !i.isCorrect);
+        if (failedIssues.length > 0) {
+          validationReasons.push(
+            `Incorrect solution(s): ${failedIssues.map((i) => `#${i.issueNumber} (${i.explanation})`).join(', ')}.`
+          );
         }
 
         // Check if existing PR record is already in Firestore
@@ -324,7 +379,11 @@ export const githubSyncService = {
         }
 
         const effectiveMerged = prStatus === 'merged' || isMerged;
-        const effectiveScore = effectiveMerged ? 15 : prStatus === 'AUTO_APPROVED' ? 10 : 0;
+        const earnedPRScore = correctlySolvedIssues.reduce(
+          (sum, item) => sum + (item.isPartial ? Math.round(item.basePoints * 0.5 * 100) / 100 : item.basePoints),
+          0
+        );
+        const effectiveScore = earnedPRScore;
 
         const firestorePrData: FirestorePullRequest = {
           id: prId,
@@ -339,7 +398,7 @@ export const githubSyncService = {
           status: prStatus,
           processingState,
           testsPassed,
-          correct: effectiveMerged || prStatus === 'AUTO_APPROVED',
+          correct: correctlySolvedIssues.length > 0 || effectiveMerged || prStatus === 'AUTO_APPROVED',
           merged: effectiveMerged,
           score: effectiveScore,
           labels,
@@ -374,37 +433,34 @@ export const githubSyncService = {
         if (isFirebaseConfigured()) {
           await setDoc(doc(db, 'pullRequests', prId), sanitizeFirestoreData(firestorePrData), { merge: true });
 
-          // If merged or auto-approved, trigger scoring engines so Team & Participant XP update
-          if (effectiveMerged || prStatus === 'AUTO_APPROVED') {
+          // Trigger scoring engines so Team & Participant XP and squad rosters update
+          if (effectiveMerged || prStatus === 'AUTO_APPROVED' || prNumber) {
             try {
-              // 1. Team-based non-duplicated issue scoring
+              // 1. Team-based non-duplicated issue scoring (awards only correctly validated issues if approved/merged)
+              const shouldAwardPoints = effectiveMerged || prStatus === 'AUTO_APPROVED';
+              const solvedItems = shouldAwardPoints
+                ? correctlySolvedIssues.map((item) => ({
+                    issueNumber: item.issueNumber,
+                    difficulty: item.difficulty,
+                    basePoints: item.basePoints,
+                    correctnessScore: item.isPartial ? 0.5 : item.correctnessScore,
+                    codeQualityScore: item.codeQualityScore,
+                    commitQualityScore: item.commitQualityScore,
+                    labels,
+                    titleOrBody: `${pr.title} ${pr.body || ''}`,
+                  }))
+                : [];
+
               await scoringEngine.processTeamPRScoring({
                 teamId: `team_${repo.toLowerCase()}`,
                 repositoryId: repoId,
+                repositoryName: repo,
                 repositoryFullName: fullName,
                 githubUsername: author,
                 prNumber,
                 prId,
-                solvedIssues: issueNumbers.map((num) => ({
-                  issueNumber: num,
-                  labels,
-                  titleOrBody: `${pr.title} ${pr.body || ''}`,
-                })),
+                solvedIssues: solvedItems,
                 merged: effectiveMerged,
-              });
-
-              // 2. Individual scoring compatibility
-              await scoringEngine.processPRScoring({
-                prNumber,
-                repositoryId: repoId,
-                repositoryFullName: fullName,
-                githubUsername: author,
-                title: pr.title,
-                testsPassed: true,
-                reviewed: true,
-                merged: effectiveMerged,
-                issueNumber,
-                prLabels: labels,
               });
             } catch (sErr) {
               console.warn(`[GitHubSync] Scoring error for PR #${prNumber}:`, sErr);

@@ -18,7 +18,7 @@ import type {
   ValidationChecks,
   PRProcessingState,
 } from '../types';
-import { scoringEngine } from './scoringEngine';
+
 
 export interface PRValidationInput {
   prNumber: number;
@@ -67,13 +67,15 @@ import type { IssueDifficulty } from '../types';
  *   "closes #10 and #12" -> [10, 12]
  *   "Resolves #5, task #6" -> [5, 6]
  */
-export function extractAllLinkedIssues(title: string, body?: string): number[] {
-  const text = `${title} ${body || ''}`;
+import { findCatalogIssue } from './javaSolutionEvaluator';
+
+export function extractAllLinkedIssues(title: string, body?: string, filePaths: string[] = []): number[] {
+  const text = `${title} ${body || ''} ${(filePaths || []).join(' ')}`;
   const found = new Set<number>();
 
-  // 1. Keyword-based matching with multiple comma/and separated hashtags
-  // Matches: fixes #1, #2, #3 or closes 4, 5
-  const keywordBlockRegex = /(?:fixes|closed|closes|fixed|resolves|resolved|challenge|issue|task)\s*([#\d\s,;&and]+)/gi;
+  // 1. Keyword-based matching with multiple comma/and/hyphen/underscore separated numbers
+  // Matches: fixes #1, #2, #3 or closes 4, 5 or Issue-1 or Issue_21 or task: 57
+  const keywordBlockRegex = /(?:fixes|closed|closes|fixed|resolves|resolved|challenge|issue|task)[\s\-_:#]*([#\d\s,\-_;&and]+)/gi;
   let blockMatch: RegExpExecArray | null;
   while ((blockMatch = keywordBlockRegex.exec(text)) !== null) {
     const numbersInBlock = blockMatch[1].match(/\d+/g);
@@ -85,7 +87,15 @@ export function extractAllLinkedIssues(title: string, body?: string): number[] {
     }
   }
 
-  // 2. URL-based matching: /issues/(\d+)
+  // 2. Direct pattern matching for filenames, commit messages, and tokens: e.g. Issue01_, Issue57_VH01, Issue-1
+  const directIssueRegex = /(?:^|[\/\\_\-\s])Issue0*(\d+)(?:[_\-\.\/\s]|$)/gi;
+  let directMatch: RegExpExecArray | null;
+  while ((directMatch = directIssueRegex.exec(text)) !== null) {
+    const n = parseInt(directMatch[1], 10);
+    if (n > 0) found.add(n);
+  }
+
+  // 3. URL-based matching: /issues/(\d+)
   const urlRegex = /\/issues\/(\d+)/gi;
   let urlMatch: RegExpExecArray | null;
   while ((urlMatch = urlRegex.exec(text)) !== null) {
@@ -93,7 +103,7 @@ export function extractAllLinkedIssues(title: string, body?: string): number[] {
     if (n > 0) found.add(n);
   }
 
-  // 3. Fallback: Standalone hashtag matches: #12, #14
+  // 4. Standalone hashtag matches: #12, #14
   const hashRegex = /#(\d+)/g;
   let hashMatch: RegExpExecArray | null;
   while ((hashMatch = hashRegex.exec(text)) !== null) {
@@ -107,20 +117,18 @@ export function extractAllLinkedIssues(title: string, body?: string): number[] {
 /**
  * Backward compatibility: Extracts the first linked issue number.
  */
-export function extractLinkedIssue(title: string, body?: string): number {
-  const all = extractAllLinkedIssues(title, body);
+export function extractLinkedIssue(title: string, body?: string, filePaths: string[] = []): number {
+  const all = extractAllLinkedIssues(title, body, filePaths);
   return all.length > 0 ? all[0] : 0;
 }
 
 /**
- * Determines the difficulty of an issue strictly from trusted issue metadata / validated GitHub labels.
+ * Determines the difficulty of an issue from trusted labels or challenge catalog.
  * Supported trusted labels:
  *   - difficulty:easy (10 XP)
  *   - difficulty:medium (20 XP)
  *   - difficulty:hard (30 XP)
  *   - difficulty:very-hard (40 XP)
- * 
- * NOTE: Does not infer difficulty from untrusted PR descriptions or titles.
  */
 export function determineIssueDifficulty(
   _issueNumber: number,
@@ -157,6 +165,16 @@ export function determineIssueDifficulty(
     normalizedLabels.includes('points:10')
   ) {
     return 'EASY';
+  }
+
+  // Fallback to catalog lookup
+  const catalog = findCatalogIssue('', _issueNumber);
+  if (catalog?.difficulty) {
+    return catalog.difficulty;
+  }
+
+  if (_issueNumber >= 57 && _issueNumber <= 64) {
+    return 'VERY_HARD';
   }
 
   return 'EASY';
@@ -470,26 +488,6 @@ export async function persistPRValidationAndScore(
     await setDoc(prDocRef, prDocData, { merge: true });
   }
 
-  let newPointsAwarded = 0;
-
-  // 2. If AUTO_APPROVED or MERGED, process scoring engine deterministically
-  if (validationResult.status === 'AUTO_APPROVED' || validationResult.status === 'MERGED') {
-    const scoringRes = await scoringEngine.processPRScoring({
-      prNumber: input.prNumber,
-      repositoryId: input.repositoryId,
-      repositoryFullName: input.repositoryFullName,
-      githubUsername: input.authorUsername,
-      title: input.prTitle,
-      testsPassed: validationResult.testsPassed,
-      reviewed: validationResult.status === 'AUTO_APPROVED',
-      merged: input.isMerged,
-      issueNumber: validationResult.issueNumber,
-      issueLabels: input.issueLabels,
-      prLabels: input.prLabels,
-      changedFiles: input.changedFiles,
-    });
-    newPointsAwarded = scoringRes.newPointsAwarded;
-  }
-
+  const newPointsAwarded = 0;
   return { prId, newPointsAwarded };
 }

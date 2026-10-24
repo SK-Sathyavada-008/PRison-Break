@@ -6,7 +6,7 @@
 
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../config/firebase';
-import { scoringEngine } from './scoringEngine';
+
 
 export interface MergeResult {
   success: boolean;
@@ -162,28 +162,14 @@ export const githubMergeService = {
                 processingState: 'MERGED',
                 merged: true,
                 correct: true,
-                score: (existing.score || 0) + 15,
+                score: existing.score || 0,
                 updatedAt: now,
               },
               { merge: true }
             );
           }
 
-          // Trigger deterministic scoring engine for merged state (+15 XP, +10 XP correct, first PR bonus)
-          await scoringEngine.processPRScoring({
-            prNumber,
-            repositoryId: repoId,
-            repositoryFullName: fullName,
-            githubUsername: author,
-            title,
-            testsPassed: true,
-            reviewed: true,
-            merged: true,
-            issueNumber,
-            prLabels,
-          });
-
-          console.log(`[GitHubMerge] Auto-merged PR #${prNumber} and updated scoring engine for @${author}.`);
+          console.log(`[GitHubMerge] Auto-merged PR #${prNumber} in ${fullName} for @${author}.`);
         } catch (dbErr) {
           console.error('[GitHubMerge] Error updating Firestore after merge:', dbErr);
         }

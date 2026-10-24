@@ -463,20 +463,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         // 11. Resolve Team for repository (e.g. squard_1 -> Squad 1)
         const teamSlug = matchedRepoId.toLowerCase().replace(/^repo_/, '');
-        const teamId = `team_${teamSlug}`;
-        const teamDocRef = doc(db, 'teams', teamId);
+        let teamId = `team_${teamSlug}`;
+        let teamDocRef = doc(db, 'teams', teamId);
         const teamSnap = await getDoc(teamDocRef);
-        let teamData: any = teamSnap.exists() ? teamSnap.data() : null;
+        let teamData: any = teamSnap.exists() ? { id: teamSnap.id, ...teamSnap.data() } : null;
 
         if (!teamData) {
-          // Check if any team has repositoryId == matchedRepoId
+          // Check if any team has repositoryId == matchedRepoId or matching repositoryName or member
           const allTeamsSnap = await getDocs(collection(db, 'teams'));
           const foundTeamDoc = allTeamsSnap.docs.find((d) => {
             const td = d.data();
-            return td.repositoryId === matchedRepoId || td.repositoryName?.toLowerCase() === teamSlug;
+            return (
+              td.repositoryId === matchedRepoId ||
+              td.repositoryName?.toLowerCase() === teamSlug ||
+              td.members?.some((m: any) => m.githubUsername?.toLowerCase() === author.toLowerCase())
+            );
           });
           if (foundTeamDoc) {
-            teamData = foundTeamDoc.data();
+            teamData = { id: foundTeamDoc.id, ...foundTeamDoc.data() };
+            teamId = foundTeamDoc.id;
+            teamDocRef = foundTeamDoc.ref;
           }
         }
 
@@ -649,16 +655,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
 
           // Update Team aggregate stats
-          if (totalNewPoints > 0 || isMerged || newlySolvedIssues.length > 0) {
+          if (totalNewPoints > 0 || isMerged || newlySolvedIssues.length > 0 || prNumber) {
             const updatedSolvedIssues = [...(teamData.solvedIssues || []), ...newlySolvedIssues];
-            const updatedTeamScore = (teamData.totalScore || 0) + totalNewPoints;
+            const currentEarnedXP = teamData.earnedXP ?? (teamData.totalScore || 0);
+            const updatedEarnedXP = currentEarnedXP + totalNewPoints;
+            const bonusXP = teamData.bonusXP || 0;
+            const updatedTotalXP = updatedEarnedXP + bonusXP;
 
             // Update member entry in team
             const members = teamData.members ? [...teamData.members] : [];
             const mIdx = members.findIndex((m: any) => m.githubUsername.toLowerCase() === author.toLowerCase());
             if (mIdx >= 0) {
+              const existingIssues = members[mIdx].assignedIssues || [];
+              const mergedIssues = Array.from(new Set([...existingIssues, ...issueNumbers]));
               members[mIdx] = {
                 ...members[mIdx],
+                name: members[mIdx].name || author,
+                assignedIssues: mergedIssues,
                 prSubmitted: true,
                 prNumber,
                 score: (members[mIdx].score || 0) + totalNewPoints,
@@ -675,8 +688,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               });
             }
 
+            const prsSubmitted = members.filter((m: any) => m.prSubmitted).length;
+
             const teamUpdates: any = {
-              totalScore: updatedTeamScore,
+              totalScore: updatedTotalXP,
+              earnedXP: updatedEarnedXP,
+              bonusXP,
+              totalXP: updatedTotalXP,
+              prsSubmitted,
               solvedIssues: updatedSolvedIssues,
               validatedIssueCount: updatedSolvedIssues.length,
               members,

@@ -363,7 +363,7 @@ export const issueService = {
       const q = query(collection(db, 'issues'));
       const snap = await getDocs(q);
       if (snap.empty) {
-        return [...inMemoryIssues];
+        return [];
       }
       return snap.docs.map((d) => d.data() as FirestoreIssue);
     } catch (err) {
@@ -390,7 +390,7 @@ export const issueService = {
         issuesRef,
         (snapshot) => {
           if (snapshot.empty) {
-            onUpdate([...inMemoryIssues]);
+            onUpdate([]);
           } else {
             const list = snapshot.docs.map((d) => d.data() as FirestoreIssue);
             onUpdate(list);

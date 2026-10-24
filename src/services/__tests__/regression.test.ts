@@ -6,7 +6,6 @@ import {
   isDocumentationContribution,
   calculateApplicableRules,
   evaluateTeamIssueScoring,
-  SCORING_RULES,
 } from '../scoringEngine';
 
 describe('Scoring & Validation Regression Suite', () => {
@@ -39,7 +38,7 @@ describe('Scoring & Validation Regression Suite', () => {
     expect(validateChangedFiles(['large.ts'], 6000, 10).filesValid).toBe(false);
   });
 
-  test('calculateApplicableRules calculates individual rules for PR', () => {
+  test('calculateApplicableRules enforces issue-only scoring (PR bonuses disabled)', () => {
     const rules = calculateApplicableRules(
       {
         prNumber: 1,
@@ -55,11 +54,8 @@ describe('Scoring & Validation Regression Suite', () => {
       false
     );
 
-    const keys = rules.map((r) => r.ruleKey);
-    expect(keys).toContain(SCORING_RULES.CORRECT_PR.key);
-    expect(keys).toContain(SCORING_RULES.DIFFICULT_ISSUE.key);
-    expect(keys).toContain(SCORING_RULES.PR_MERGED.key);
-    expect(keys).toContain(SCORING_RULES.FIRST_SUCCESSFUL_PR.key);
+    // PRison Break Event Rules: XP is strictly for issues, PR bonuses disabled
+    expect(rules).toEqual([]);
   });
 
   test('extractAllLinkedIssues extracts multiple issues from single student PR', () => {

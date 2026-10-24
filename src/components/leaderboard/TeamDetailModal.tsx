@@ -257,7 +257,7 @@ export default function TeamDetailModal({
           <div>
             <h3 className="text-xs font-mono font-bold tracking-widest text-slate-400 uppercase mb-3 flex items-center gap-2">
               <Users size={14} className="text-[#FF5470]" />
-              <span>4 Registered Squad Students</span>
+              <span>{team.configuredTeamSize || members.length || 4} Registered Squad Students</span>
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {members.map((m, idx) => (

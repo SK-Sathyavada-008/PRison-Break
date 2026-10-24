@@ -74,17 +74,19 @@ export const scoreReconciliationService = {
 
       calculatedTeamScores[team.id] = canonicalScore;
 
-      // 2. Compare calculated score with cached score
-      if (canonicalScore !== team.totalScore) {
+      // 2. Compare calculated score with cached score (accounting for legitimate bonus XP)
+      const expectedTotal = canonicalScore + (team.bonusXP || 0);
+      const teamTotal = team.totalScore ?? 0;
+      if (expectedTotal !== teamTotal) {
         discrepancies.push({
           id: `disc_mismatch_${team.id}`,
           type: 'CACHED_SCORE_MISMATCH',
           severity: 'ERROR',
           teamId: team.id,
           repositoryId: team.repositoryName,
-          cachedValue: team.totalScore,
-          calculatedValue: canonicalScore,
-          description: `Cached team score (${team.totalScore} XP) does not match canonical ledger sum (${canonicalScore} XP) for ${team.name}.`,
+          cachedValue: teamTotal,
+          calculatedValue: expectedTotal,
+          description: `Cached team score (${teamTotal} XP) does not match canonical ledger sum (${expectedTotal} XP: ${canonicalScore} earned + ${team.bonusXP || 0} bonus) for ${team.name}.`,
         });
       }
     }

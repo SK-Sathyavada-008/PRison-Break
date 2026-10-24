@@ -539,13 +539,7 @@ export const teamService = {
         colRef,
         (snapshot) => {
           if (snapshot.empty) {
-            // If teams collection is empty, fallback to mock teams
-            const sorted = sortTeams(inMemoryTeams).map((t, index) => ({
-              ...t,
-              rank: index + 1,
-              previousRank: index + 1,
-            }));
-            onUpdate(sorted);
+            onUpdate([]);
             return;
           }
 
@@ -606,10 +600,7 @@ export const teamService = {
       const colRef = collection(db, COLLECTION_NAME);
       const snapshot = await getDocs(colRef);
       if (snapshot.empty) {
-        return sortTeams(inMemoryTeams).map((t, i) => ({
-          ...t,
-          rank: i + 1,
-        }));
+        return [];
       }
 
       const raw = snapshot.docs.map((docSnap) => {

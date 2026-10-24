@@ -65,7 +65,19 @@ export const seedService = {
     }
 
     try {
-      const collectionsToPurge = ['teams', 'issues', 'auditLogs', 'participants', 'repositories', 'pullRequests', 'scoreEvents'];
+      const collectionsToPurge = [
+        'teams',
+        'issues',
+        'auditLogs',
+        'participants',
+        'repositories',
+        'pullRequests',
+        'scoreEvents',
+        'reviews',
+        'webhookEvents',
+        'bonusAwards',
+        'challengeMappings',
+      ];
       for (const colName of collectionsToPurge) {
         const snap = await getDocs(collection(db, colName));
         const deletions = snap.docs.map((d) => deleteDoc(d.ref));

@@ -104,12 +104,12 @@ function PodiumCard({ team, position }: PodiumCardProps) {
           <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 mb-2 px-1">
             <span className="flex items-center gap-1">
               <Users size={12} className="text-cyan-400" />
-              <span>4 SQUAD MEMBERS</span>
+              <span>{members.length} SQUAD MEMBER{members.length !== 1 ? 'S' : ''}</span>
             </span>
-            <span className="text-slate-500">{members.filter(m => m.prSubmitted).length}/4 PRs</span>
+            <span className="text-slate-500">{members.filter(m => m.prSubmitted).length}/{team.configuredTeamSize || members.length || 4} PRs</span>
           </div>
           <div className="grid grid-cols-2 gap-1.5 text-left">
-            {members.slice(0, 4).map((m, idx) => (
+            {members.slice(0, team.configuredTeamSize || 5).map((m, idx) => (
               <div
                 key={m.githubUsername || idx}
                 className="flex items-center justify-between p-1.5 rounded-lg bg-slate-900/60 border border-slate-800/60 text-[11px] font-mono text-slate-300 truncate"

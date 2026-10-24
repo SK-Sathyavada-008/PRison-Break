@@ -112,7 +112,7 @@ export default function LeaderboardPage() {
     [teams]
   );
   const totalPrsSubmitted = useMemo(
-    () => teams.reduce((acc, t) => acc + (t.prsSubmitted ?? 0), 0),
+    () => teams.reduce((acc, t) => acc + (t.members?.filter((m) => m.prSubmitted).length ?? t.prsSubmitted ?? 0), 0),
     [teams]
   );
   const maxPossiblePRs = useMemo(

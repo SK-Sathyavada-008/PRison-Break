@@ -38,7 +38,7 @@ import {
 } from 'lucide-react';
 import type { PullRequest } from '../../types';
 import { ISSUE_DIFFICULTY_POINTS } from '../../types';
-import { scoringEngine, SCORING_RULES } from '../../services/scoringEngine';
+import { scoringEngine } from '../../services/scoringEngine';
 import {
   calculateAwardedPoints,
   RUBRIC_VERSION,
@@ -122,22 +122,9 @@ export default function PullRequestReviewModal({
           : 'Suspicious modifications or protected CI paths touched.',
       ];
 
-  // Potential rules preview
   const issueLabels = pr.issueLabels || [];
   const prLabels = pr.labels || [];
-  const allLabels = [...issueLabels, ...prLabels].map((l) => l.toLowerCase());
-
-  const hasDifficultIssue =
-    allLabels.includes('difficulty:hard') ||
-    allLabels.includes('difficulty:medium') ||
-    allLabels.includes('points:20');
-  const hasBug = allLabels.includes('type:bug') || allLabels.includes('bug');
-  const isHard = allLabels.includes('difficulty:hard');
-  const hasDifficultBug = (hasBug && isHard) || allLabels.includes('points:25');
-  const isDocs =
-    allLabels.includes('type:documentation') ||
-    allLabels.includes('documentation') ||
-    allLabels.includes('docs');
+  const allLabels: string[] = [...issueLabels, ...prLabels];
 
   // Handle Approve
   const handleApprove = async () => {
@@ -697,37 +684,20 @@ export default function PullRequestReviewModal({
               <div>
                 <h3 className="font-mono text-xs uppercase tracking-wider text-slate-400 font-semibold mb-2 flex items-center gap-1.5">
                   <Award size={14} className="text-amber-400" />
-                  Scoring Rule Matrix Breakdown
+                  Issue-Based Scoring Matrix
                 </h3>
                 <div className="space-y-1.5 font-mono text-xs">
-                  {[
-                    { label: SCORING_RULES.CORRECT_PR.label, points: 10, applicable: pr.correct || allPassed },
-                    { label: SCORING_RULES.DIFFICULT_ISSUE.label, points: 20, applicable: hasDifficultIssue },
-                    { label: SCORING_RULES.PR_REVIEWED.label, points: 5, applicable: true },
-                    { label: SCORING_RULES.PR_MERGED.label, points: 15, applicable: !!pr.merged },
-                    { label: SCORING_RULES.FIRST_SUCCESSFUL_PR.label, points: 10, applicable: !pr.merged },
-                    { label: SCORING_RULES.DOCS_CONTRIBUTION.label, points: 10, applicable: isDocs },
-                    { label: SCORING_RULES.DIFFICULT_BUG_FIX.label, points: 25, applicable: hasDifficultBug },
-                  ].map((rule) => (
-                    <div
-                      key={rule.label}
-                      className="p-2 rounded border border-slate-800/80 bg-slate-900/40 flex items-center justify-between"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            rule.applicable ? 'bg-emerald-400 shadow-[0_0_6px_#10b981]' : 'bg-slate-600'
-                          }`}
-                        />
-                        <span className={rule.applicable ? 'text-slate-200' : 'text-slate-500'}>
-                          {rule.label}
-                        </span>
-                      </div>
-                      <span className={`font-bold ${rule.applicable ? 'text-emerald-400' : 'text-slate-600'}`}>
-                        +{rule.points} XP
-                      </span>
+                  <div className="p-2.5 rounded border border-slate-800/80 bg-slate-900/40 text-slate-300 space-y-1">
+                    <p className="text-slate-400">
+                      XP is awarded <span className="text-emerald-400 font-bold">only for fixed issues</span>. PR reviews and merges do not award PR XP.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                      <div>• Easy: <span className="text-emerald-400">+10 XP</span> (Partial: +5 XP)</div>
+                      <div>• Medium: <span className="text-emerald-400">+20 XP</span> (Partial: +10 XP)</div>
+                      <div>• Hard: <span className="text-emerald-400">+30 XP</span> (Partial: +15 XP)</div>
+                      <div>• Very Hard: <span className="text-emerald-400">+40 XP</span> (Partial: +20 XP)</div>
                     </div>
-                  ))}
+                  </div>
                 </div>
               </div>
 

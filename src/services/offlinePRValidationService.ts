@@ -281,10 +281,6 @@ export const offlinePRValidationService = {
       }
     }
 
-    if (assignedStudentIssues.length === 0) {
-      assignedStudentIssues = [1, 2, 3, 4];
-    }
-
     // 5. Ingest and inspect commit history
     const commits = context.commits || [];
     const commitMessages = commits.map((c) => c.message);
@@ -302,9 +298,14 @@ export const offlinePRValidationService = {
       }
     }
 
-    // 6. Extract linked issues from PR title, body, and commit messages
+    // 6. Extract linked issues from PR title, body, commit messages, and changed file paths
     const textToScan = `${context.title} ${context.body || ''} ${commitMessages.join(' ')}`;
-    const extractedIssueNumbers = extractAllLinkedIssues(context.title, textToScan);
+    const filePaths = (context.changedFiles || []).map((f) => f.filename);
+    const extractedIssueNumbers = extractAllLinkedIssues(context.title, textToScan, filePaths);
+
+    if (assignedStudentIssues.length === 0) {
+      assignedStudentIssues = extractedIssueNumbers.length > 0 ? extractedIssueNumbers : [1, 2, 3, 4];
+    }
 
     const assignedIssuesCovered: number[] = [];
     const unassignedIssuesDetected: number[] = [];
@@ -435,7 +436,26 @@ export const offlinePRValidationService = {
     const prId = context.prId || `pr_${context.repositoryId}_${context.prNumber}`;
     const cleanRepo = context.repositoryId.trim().toLowerCase().replace(/^repo_/, '');
     const cleanUsername = context.authorUsername.trim().toLowerCase();
-    const teamId = `team_${cleanRepo}`;
+    let teamId = `team_${cleanRepo}`;
+    let teamDocRef = doc(db, 'teams', teamId);
+    let teamSnap = await getDoc(teamDocRef);
+
+    if (!teamSnap.exists()) {
+      const allTeamsSnap = await getDocs(collection(db, 'teams'));
+      const foundDoc = allTeamsSnap.docs.find((d) => {
+        const td = d.data();
+        return (
+          td.repositoryId === context.repositoryId ||
+          td.repositoryName?.toLowerCase() === cleanRepo ||
+          td.members?.some((m: any) => m.githubUsername?.toLowerCase() === cleanUsername)
+        );
+      });
+      if (foundDoc) {
+        teamId = foundDoc.id;
+        teamDocRef = foundDoc.ref;
+        teamSnap = foundDoc as any;
+      }
+    }
     const now = new Date().toISOString();
 
     // 1. Fetch existing PR to prevent out-of-order regressions
@@ -551,33 +571,53 @@ export const offlinePRValidationService = {
       const veryHardCount = solvedIssuesList.filter((s) => s.difficulty === 'VERY_HARD').length;
 
       // Update Team document atomically
-      const teamDocRef = doc(db, 'teams', teamId);
-      const teamSnap = await getDoc(teamDocRef);
-
       if (teamSnap.exists()) {
         const teamData = teamSnap.data() as FirestoreTeam;
         const members = teamData.members ? [...teamData.members] : [];
 
         const memberIdx = members.findIndex((m) => m.githubUsername.toLowerCase() === cleanUsername);
         if (memberIdx >= 0) {
+          const existingIssues = members[memberIdx].assignedIssues || [];
+          const mergedIssues = Array.from(new Set([...existingIssues, ...result.assignedIssuesCovered]));
           members[memberIdx] = {
             ...members[memberIdx],
+            name: members[memberIdx].name || context.authorUsername,
+            assignedIssues: mergedIssues,
             prSubmitted: true,
             prNumber: context.prNumber,
             score: (members[memberIdx].score || 0) + result.totalAwardedPoints,
             totalScore: (members[memberIdx].totalScore || 0) + result.totalAwardedPoints,
             validationStatus: result.status,
           };
+        } else {
+          members.push({
+            studentId: `s_${cleanUsername}`,
+            name: context.authorUsername,
+            githubUsername: context.authorUsername,
+            assignedIssues: result.assignedIssuesCovered,
+            prSubmitted: true,
+            prNumber: context.prNumber,
+            score: result.totalAwardedPoints,
+            totalScore: result.totalAwardedPoints,
+            validationStatus: result.status,
+          });
         }
 
+        const prsSubmitted = members.filter((m) => m.prSubmitted).length;
         const currentBonus = teamData.bonusXP || 0;
         const newTotalXP = roundToTwoDecimals(aggregatedTeamScore + currentBonus);
 
         await updateDoc(teamDocRef, {
+          ...((
+            teamData.name.startsWith('Squad 1792') ||
+            teamData.repositoryName?.startsWith('1792') ||
+            (teamData.name.startsWith('Squad ') && /\d{6,}/.test(teamData.name))
+          ) ? { name: cleanRepo, repositoryName: cleanRepo } : {}),
           earnedXP: aggregatedTeamScore,
           bonusXP: currentBonus,
           totalXP: newTotalXP,
           totalScore: newTotalXP,
+          prsSubmitted,
           solvedIssues: solvedIssuesList,
           validatedIssueCount: solvedIssuesList.length,
           correctlySolvedIssuesCount: solvedIssuesList.length,
@@ -586,6 +626,42 @@ export const offlinePRValidationService = {
           updatedAt: now,
           ...(result.isMerged ? { lastMergedAt: now } : {}),
         });
+      } else {
+        const newTeamData: FirestoreTeam = {
+          id: teamId,
+          name: cleanRepo,
+          repositoryId: context.repositoryId,
+          repositoryName: cleanRepo,
+          repositoryFullName: context.repositoryFullName || cleanRepo,
+          members: [
+            {
+              studentId: `s_${cleanUsername}`,
+              name: context.authorUsername,
+              githubUsername: context.authorUsername,
+              assignedIssues: result.assignedIssuesCovered,
+              prSubmitted: true,
+              prNumber: context.prNumber,
+              score: result.totalAwardedPoints,
+              totalScore: result.totalAwardedPoints,
+              validationStatus: result.status,
+            },
+          ],
+          totalScore: aggregatedTeamScore,
+          earnedXP: aggregatedTeamScore,
+          bonusXP: 0,
+          totalXP: aggregatedTeamScore,
+          solvedIssues: solvedIssuesList,
+          validatedIssueCount: solvedIssuesList.length,
+          correctlySolvedIssuesCount: solvedIssuesList.length,
+          assignedIssueCount: 4,
+          veryHardSolvedCount: veryHardCount,
+          prsSubmitted: 1,
+          active: true,
+          createdAt: now,
+          updatedAt: now,
+          ...(result.isMerged ? { lastMergedAt: now } : {}),
+        };
+        await setDoc(teamDocRef, newTeamData);
       }
     } else {
       // In-Memory update for tests / offline mode

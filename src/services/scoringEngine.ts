@@ -40,6 +40,7 @@ export { javaGradingEngine, calculateAwardedPoints, roundToTwoDecimals, RUBRIC_V
 export interface TeamPREvaluationContext {
   teamId?: string;
   repositoryId: string;
+  repositoryName?: string;
   repositoryFullName?: string;
   githubUsername: string; // The student author
   prNumber: number;
@@ -47,6 +48,7 @@ export interface TeamPREvaluationContext {
   solvedIssues: Array<{
     issueNumber: number;
     difficulty?: IssueDifficulty;
+    basePoints?: number;
     labels?: string[];
     titleOrBody?: string;
     correctnessScore?: number;
@@ -93,6 +95,11 @@ export function evaluateTeamIssueScoring(
     const issueNum = item.issueNumber;
     if (issueNum <= 0) continue;
 
+    // Skip incorrect / failing issues (0 correctness score)
+    if (item.correctnessScore !== undefined && item.correctnessScore <= 0) {
+      continue;
+    }
+
     // Check if already solved by this team
     if (existingSet.has(issueNum)) {
       duplicateIssuesIgnored.push(issueNum);
@@ -102,12 +109,23 @@ export function evaluateTeamIssueScoring(
     const difficulty: IssueDifficulty =
       item.difficulty ||
       determineIssueDifficulty(issueNum, item.labels || [], item.titleOrBody || '');
-    const basePoints = ISSUE_DIFFICULTY_POINTS[difficulty] ?? 10;
+    const basePoints = item.basePoints || (ISSUE_DIFFICULTY_POINTS[difficulty] ?? 10);
     const c = item.correctnessScore ?? 1.0;
     const q = item.codeQualityScore ?? 1.0;
     const m = item.commitQualityScore ?? 1.0;
 
-    const points = calculateAwardedPoints(basePoints, c, q, m);
+    let points: number;
+    let isPartial = false;
+    if (c > 0 && c < 1.0) {
+      isPartial = true;
+      // Partial correct: award 50% of the total XP they might receive
+      points = roundToTwoDecimals(basePoints * 0.5);
+    } else if (c >= 1.0) {
+      points = basePoints;
+    } else {
+      continue;
+    }
+
     const idempotencyKey = `se_${repoSlug}_issue_${issueNum}`;
 
     newIssuesToAward.push({
@@ -116,11 +134,13 @@ export function evaluateTeamIssueScoring(
       points,
       basePoints,
       componentScores: { correctness: c, codeQuality: q, commitQuality: m },
-      formula: 'basePoints * (0.70 * C + 0.20 * Q + 0.10 * M)',
+      formula: isPartial ? 'basePoints * 0.5 (Partial: 50% XP)' : 'basePoints (Full: 100% XP)',
       rubricVersion: RUBRIC_VERSION,
       idempotencyKey,
       isDuplicate: false,
-      label: `Issue #${issueNum} [${difficulty}] (${points}/${basePoints} pts)`,
+      label: isPartial
+        ? `Issue #${issueNum} [${difficulty}] (${points}/${basePoints} pts) (Partial)`
+        : `Issue #${issueNum} [${difficulty}] (${points}/${basePoints} pts)`,
     });
 
     existingSet.add(issueNum);
@@ -279,85 +299,13 @@ export function evaluateAutoApprovalConditions(
  * Evaluates all applicable scoring rules for a PR deterministically.
  */
 export function calculateApplicableRules(
-  context: PREvaluationContext,
-  hasPriorSuccessfulPR: boolean
+  _context: PREvaluationContext,
+  _hasPriorSuccessfulPR: boolean
 ): Array<{ ruleKey: string; points: number; label: string; idempotencyKey: string }> {
-  const results: Array<{ ruleKey: string; points: number; label: string; idempotencyKey: string }> = [];
-  const repoSlug = context.repositoryId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const prNum = context.prNumber;
-  const allLabels = [...(context.issueLabels || []), ...(context.prLabels || [])];
-
-  // 1. Correct PR (+10) — awarded if tests pass and PR is verified / correct / merged
-  if (context.testsPassed || context.merged) {
-    results.push({
-      ruleKey: SCORING_RULES.CORRECT_PR.key,
-      points: SCORING_RULES.CORRECT_PR.points,
-      label: SCORING_RULES.CORRECT_PR.label,
-      idempotencyKey: `se_${repoSlug}_pr_${prNum}_correct`,
-    });
-  }
-
-  // 2. Difficult issue (+20)
-  if (isDifficultIssue(allLabels)) {
-    results.push({
-      ruleKey: SCORING_RULES.DIFFICULT_ISSUE.key,
-      points: SCORING_RULES.DIFFICULT_ISSUE.points,
-      label: SCORING_RULES.DIFFICULT_ISSUE.label,
-      idempotencyKey: `se_${repoSlug}_pr_${prNum}_difficult_issue`,
-    });
-  }
-
-  // 3. PR reviewed (+5)
-  if (context.reviewed) {
-    results.push({
-      ruleKey: SCORING_RULES.PR_REVIEWED.key,
-      points: SCORING_RULES.PR_REVIEWED.points,
-      label: SCORING_RULES.PR_REVIEWED.label,
-      idempotencyKey: `se_${repoSlug}_pr_${prNum}_reviewed`,
-    });
-  }
-
-  // 4. PR merged (+15)
-  if (context.merged) {
-    results.push({
-      ruleKey: SCORING_RULES.PR_MERGED.key,
-      points: SCORING_RULES.PR_MERGED.points,
-      label: SCORING_RULES.PR_MERGED.label,
-      idempotencyKey: `se_${repoSlug}_pr_${prNum}_merged`,
-    });
-  }
-
-  // 5. First successful PR (+10) — only awarded once per participant
-  if ((context.testsPassed || context.merged) && !hasPriorSuccessfulPR) {
-    results.push({
-      ruleKey: SCORING_RULES.FIRST_SUCCESSFUL_PR.key,
-      points: SCORING_RULES.FIRST_SUCCESSFUL_PR.points,
-      label: SCORING_RULES.FIRST_SUCCESSFUL_PR.label,
-      idempotencyKey: `se_${context.githubUsername.toLowerCase()}_first_pr`,
-    });
-  }
-
-  // 6. Documentation contribution (+10)
-  if (isDocumentationContribution(allLabels, context.changedFiles)) {
-    results.push({
-      ruleKey: SCORING_RULES.DOCS_CONTRIBUTION.key,
-      points: SCORING_RULES.DOCS_CONTRIBUTION.points,
-      label: SCORING_RULES.DOCS_CONTRIBUTION.label,
-      idempotencyKey: `se_${repoSlug}_pr_${prNum}_docs`,
-    });
-  }
-
-  // 7. Fixing a difficult bug (+25)
-  if (isDifficultBug(allLabels)) {
-    results.push({
-      ruleKey: SCORING_RULES.DIFFICULT_BUG_FIX.key,
-      points: SCORING_RULES.DIFFICULT_BUG_FIX.points,
-      label: SCORING_RULES.DIFFICULT_BUG_FIX.label,
-      idempotencyKey: `se_${repoSlug}_pr_${prNum}_difficult_bug`,
-    });
-  }
-
-  return results;
+  // PRison Break Event Rules:
+  // XP is strictly awarded ONLY for validated challenge issues and nothing else.
+  // PR reviews, PR merges, and PR-level bonuses are disabled.
+  return [];
 }
 
 export const scoringEngine = {
@@ -377,7 +325,12 @@ export const scoringEngine = {
     }
 
     const now = new Date().toISOString();
-    const repoName = context.repositoryId.replace(/^repo_/, '');
+    const rawRepoName = context.repositoryName ||
+      (context.repositoryFullName && !context.repositoryFullName.includes('1792774425262')
+        ? context.repositoryFullName.split('/')[1]
+        : null) ||
+      context.repositoryId.replace(/^repo_/, '');
+    const repoName = rawRepoName;
     const cleanUsername = context.githubUsername.trim().toLowerCase();
 
     // 1. Locate Team
@@ -414,16 +367,14 @@ export const scoringEngine = {
       }
     }
 
-    // Auto-create squad if not found (e.g. squard_1)
+    // Auto-create squad if not found (Squad name is the repository name, per competition rules)
     if (!teamData) {
       teamId = teamId || `team_${repoName.toLowerCase()}`;
       teamDocRef = doc(db, 'teams', teamId);
-      const squadNumMatch = repoName.match(/(\d+)/);
-      const squadNum = squadNumMatch ? squadNumMatch[1] : '1';
 
       teamData = {
         id: teamId,
-        name: `Squad ${squadNum}`,
+        name: repoName,
         repositoryId: context.repositoryId,
         repositoryName: repoName,
         repositoryFullName: context.repositoryFullName || repoName,
@@ -438,6 +389,9 @@ export const scoringEngine = {
           },
         ],
         totalScore: 0,
+        earnedXP: 0,
+        bonusXP: 0,
+        totalXP: 0,
         solvedIssues: [],
         validatedIssueCount: 0,
         correctlySolvedIssuesCount: 0,
@@ -449,6 +403,25 @@ export const scoringEngine = {
         updatedAt: now,
       };
       await setDoc(teamDocRef, teamData);
+    } else if (teamDocRef) {
+      // Fix any existing squad with random ID or outdated squad name
+      if (
+        teamData.name.startsWith('Squad 1792') ||
+        teamData.repositoryName?.startsWith('1792') ||
+        (teamData.name.startsWith('Squad ') && /\d{6,}/.test(teamData.name))
+      ) {
+        teamData.name = repoName;
+        teamData.repositoryName = repoName;
+        if (context.repositoryFullName) {
+          teamData.repositoryFullName = context.repositoryFullName;
+        }
+        await updateDoc(teamDocRef, {
+          name: repoName,
+          repositoryName: repoName,
+          repositoryFullName: teamData.repositoryFullName,
+          updatedAt: now,
+        });
+      }
     }
 
     if (!teamData || !teamDocRef) {
@@ -518,16 +491,30 @@ export const scoringEngine = {
 
     // 4. Update Team document
     let teamUpdated = false;
-    if (newPointsAwarded > 0 || context.merged || newSolvedIssues.length > 0) {
+    // Always update team if points were awarded, PR was merged, new issues solved,
+    // OR if a member submitted a PR (so teammate is immediately recognized and counted on leaderboard)
+    if (newPointsAwarded > 0 || context.merged || newSolvedIssues.length > 0 || context.prNumber) {
       const updatedSolvedIssues = [...(currentTeam.solvedIssues || []), ...newSolvedIssues];
-      const updatedTotalScore = roundToTwoDecimals((currentTeam.totalScore || 0) + newPointsAwarded);
+      // BUG FIX: Use earnedXP (not totalScore/totalXP) as the base for the new earned XP.
+      // currentTeam.totalScore == totalXP which already includes bonusXP, so using it as a base
+      // would double-count bonusXP. earnedXP is the correct field for issue-earned points only.
+      const currentEarnedXP = currentTeam.earnedXP ?? (currentTeam.totalScore || 0);
+      const updatedEarnedXP = roundToTwoDecimals(currentEarnedXP + newPointsAwarded);
 
       // Update student member in team members array
       const members = currentTeam.members ? [...currentTeam.members] : [];
       let memberIdx = members.findIndex((m) => m.githubUsername.toLowerCase() === cleanUsername);
+      const issueNumsFromPR = newSolvedIssues.length > 0
+        ? newSolvedIssues.map((i) => i.issueNumber)
+        : (context.solvedIssues || []).map((i) => i.issueNumber);
+
       if (memberIdx >= 0) {
+        const existingAssigned = members[memberIdx].assignedIssues || [];
+        const mergedAssigned = Array.from(new Set([...existingAssigned, ...issueNumsFromPR]));
         members[memberIdx] = {
           ...members[memberIdx],
+          name: members[memberIdx].name || context.githubUsername,
+          assignedIssues: mergedAssigned,
           prSubmitted: true,
           prNumber: context.prNumber,
           score: (members[memberIdx].score || 0) + newPointsAwarded,
@@ -537,7 +524,7 @@ export const scoringEngine = {
           studentId: `s_${cleanUsername}`,
           name: context.githubUsername,
           githubUsername: context.githubUsername,
-          assignedIssues: newSolvedIssues.map((i) => i.issueNumber),
+          assignedIssues: issueNumsFromPR,
           prSubmitted: true,
           prNumber: context.prNumber,
           score: newPointsAwarded,
@@ -545,13 +532,29 @@ export const scoringEngine = {
       }
 
       const veryHardSolvedCount = updatedSolvedIssues.filter((s) => s.difficulty === 'VERY_HARD').length;
+      const bonusXP = currentTeam.bonusXP || 0;
+      const totalXP = roundToTwoDecimals(updatedEarnedXP + bonusXP);
+
+      // Count prsSubmitted from members who have actually submitted PRs.
+      const prsSubmitted = members.filter((m) => m.prSubmitted).length;
 
       const teamUpdates: Partial<FirestoreTeam> = {
-        totalScore: updatedTotalScore,
+        // Only overwrite name/repositoryName if team was auto-created with a bad/numeric name.
+        // Don't overwrite admin-configured team names every time a PR is synced.
+        ...((
+          currentTeam.name.startsWith('Squad 1792') ||
+          currentTeam.repositoryName?.startsWith('1792') ||
+          (currentTeam.name.startsWith('Squad ') && /\d{6,}/.test(currentTeam.name))
+        ) ? { name: repoName, repositoryName: repoName } : {}),
+        totalScore: totalXP,
+        earnedXP: updatedEarnedXP,
+        bonusXP,
+        totalXP,
         solvedIssues: updatedSolvedIssues,
         validatedIssueCount: updatedSolvedIssues.length,
         correctlySolvedIssuesCount: updatedSolvedIssues.length,
         veryHardSolvedCount,
+        prsSubmitted,
         members,
         updatedAt: now,
       };
@@ -562,6 +565,56 @@ export const scoringEngine = {
 
       await updateDoc(currentTeamDocRef, teamUpdates);
       teamUpdated = true;
+    }
+
+    // 5. Update Participant document with new issue points
+    if (newPointsAwarded > 0) {
+      try {
+        const pDocRef = doc(db, 'participants', `p_${cleanUsername}`);
+        const pSnap = await getDoc(pDocRef);
+        if (pSnap.exists()) {
+          const currentScore = pSnap.data()?.totalScore || 0;
+          await updateDoc(pDocRef, {
+            totalScore: roundToTwoDecimals(currentScore + newPointsAwarded),
+            updatedAt: now,
+          });
+        } else {
+          await setDoc(pDocRef, {
+            id: `p_${cleanUsername}`,
+            name: context.githubUsername,
+            githubUsername: context.githubUsername,
+            totalScore: newPointsAwarded,
+            prCount: 1,
+            mergedPrCount: context.merged ? 1 : 0,
+            escapedCells: 0,
+            firstSuccessfulPr: now,
+            active: true,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      } catch (pErr) {
+        console.warn(`[ScoringEngine] Error updating participant p_${cleanUsername}:`, pErr);
+      }
+    }
+
+    // 6. Update PullRequest document score if PR exists
+    if (context.prId || (context.repositoryId && context.prNumber)) {
+      try {
+        const prDocId = context.prId || `pr_${context.repositoryId}_${context.prNumber}`;
+        const prDocRef = doc(db, 'pullRequests', prDocId);
+        const prSnap = await getDoc(prDocRef);
+        if (prSnap.exists()) {
+          const existingPRScore = prSnap.data()?.score || 0;
+          await updateDoc(prDocRef, {
+            score: roundToTwoDecimals(existingPRScore + newPointsAwarded),
+            correct: true,
+            updatedAt: now,
+          });
+        }
+      } catch (prDbErr) {
+        console.warn('[ScoringEngine] Error updating PR doc:', prDbErr);
+      }
     }
 
     return {
@@ -717,12 +770,12 @@ export const scoringEngine = {
     adminUsername: string,
     notes: string = 'Approved by administrator'
   ): Promise<{ pointsAwarded: number }> {
-    if (!isFirebaseConfigured()) return { pointsAwarded: 10 };
+    if (!isFirebaseConfigured()) return { pointsAwarded: 0 };
 
     const now = new Date().toISOString();
 
     // 1. Process scoring engine
-    const scoringResult = await this.processPRScoring({
+    await this.processPRScoring({
       prNumber: pr.prNumber,
       repositoryId: pr.repositoryId,
       repositoryFullName: pr.repositoryFullName || pr.repositoryId,
@@ -743,20 +796,21 @@ export const scoringEngine = {
       githubUsername: pr.githubUsername,
       prNumber: pr.prNumber,
       prId: pr.id,
-      solvedIssues: (pr.solvedIssueNumbers && pr.solvedIssueNumbers.length > 0
-        ? pr.solvedIssueNumbers
-        : (pr.issueNumber ? [pr.issueNumber] : [])
+      solvedIssues: (
+        (pr.solvedIssueNumbers && pr.solvedIssueNumbers.length > 0)
+          ? pr.solvedIssueNumbers
+          : ((pr.issueNumbers && pr.issueNumbers.length > 0)
+              ? pr.issueNumbers
+              : (pr.issueNumber ? [pr.issueNumber] : []))
       ).map((n: number) => ({
         issueNumber: n,
         difficulty: pr.issueDifficulty,
-        labels: pr.issueLabels,
+        labels: pr.issueLabels || pr.labels,
       })),
       merged: pr.merged,
     });
 
-    const totalPointsAwarded = (teamResult.newPointsAwarded > 0)
-      ? teamResult.newPointsAwarded
-      : scoringResult.newPointsAwarded;
+    const totalPointsAwarded = teamResult.newPointsAwarded;
 
     // 2. Update PR state to AUTO_APPROVED / APPROVED
     await updateDoc(doc(db, 'pullRequests', pr.id), {
@@ -830,12 +884,12 @@ export const scoringEngine = {
     adminUsername: string,
     mergeReason: string = 'Admin force merge'
   ): Promise<{ pointsAwarded: number }> {
-    if (!isFirebaseConfigured()) return { pointsAwarded: 15 };
+    if (!isFirebaseConfigured()) return { pointsAwarded: 0 };
 
     const now = new Date().toISOString();
 
     // 1. Process scoring engine with merged: true
-    const scoringResult = await this.processPRScoring({
+    await this.processPRScoring({
       prNumber: pr.prNumber,
       repositoryId: pr.repositoryId,
       repositoryFullName: pr.repositoryFullName || pr.repositoryId,
@@ -856,20 +910,21 @@ export const scoringEngine = {
       githubUsername: pr.githubUsername,
       prNumber: pr.prNumber,
       prId: pr.id,
-      solvedIssues: (pr.solvedIssueNumbers && pr.solvedIssueNumbers.length > 0
-        ? pr.solvedIssueNumbers
-        : (pr.issueNumber ? [pr.issueNumber] : [])
+      solvedIssues: (
+        (pr.solvedIssueNumbers && pr.solvedIssueNumbers.length > 0)
+          ? pr.solvedIssueNumbers
+          : ((pr.issueNumbers && pr.issueNumbers.length > 0)
+              ? pr.issueNumbers
+              : (pr.issueNumber ? [pr.issueNumber] : []))
       ).map((n: number) => ({
         issueNumber: n,
         difficulty: pr.issueDifficulty,
-        labels: pr.issueLabels,
+        labels: pr.issueLabels || pr.labels,
       })),
       merged: true,
     });
 
-    const totalPointsAwarded = (teamResult.newPointsAwarded > 0)
-      ? teamResult.newPointsAwarded
-      : scoringResult.newPointsAwarded;
+    const totalPointsAwarded = teamResult.newPointsAwarded;
 
     // 2. Update PR state to MERGED
     await updateDoc(doc(db, 'pullRequests', pr.id), {

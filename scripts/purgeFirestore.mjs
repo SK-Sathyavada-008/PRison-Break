@@ -13,7 +13,19 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-const collections = ['participants', 'repositories', 'pullRequests', 'scoreEvents'];
+const collections = [
+  'teams',
+  'issues',
+  'auditLogs',
+  'participants',
+  'repositories',
+  'pullRequests',
+  'scoreEvents',
+  'reviews',
+  'webhookEvents',
+  'bonusAwards',
+  'challengeMappings',
+];
 
 async function purgeAll() {
   console.log('Initiating purge of collections...');

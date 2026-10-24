@@ -20,16 +20,20 @@ import { mockScoreEvents } from '../data/mockData';
 const COLLECTION_NAME = 'scoreEvents';
 
 export function mapFirestoreToScoreEvent(data: FirestoreScoreEvent): ScoreEvent {
+  const cleanUsername = data.githubUsername || data.participantId.replace(/^p_/, '');
   return {
     id: data.id,
     participantId: data.participantId,
-    participantName: data.participantId, // fallback display
-    githubUsername: data.participantId,
+    participantName: data.participantName || `@${cleanUsername}`,
+    githubUsername: cleanUsername,
     event: data.reason ?? data.type ?? 'Score update',
     type: data.type,
     points: data.points,
     prId: data.prId,
+    prNumber: data.prNumber,
     issueId: data.issueId,
+    issueNumber: data.issueNumber,
+    repository: data.repositoryFullName || data.repositoryId || data.teamName || undefined,
     timestamp: data.timestamp,
   };
 }
